@@ -1,0 +1,6 @@
+{
+  "name": "GENDEV Worship Media Player",
+  "description": "Professional Church Video & Audio Presentation Software with Smart Fade Out/In, Dual Display Projector Mode, Background Music Auto-Ducking, and Playlist Management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
