@@ -2,12 +2,15 @@ name: Build and Release GENDEV Worship Media Player (Windows)
 
 on:
   push:
+    branches:
+      - main
+      - master
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional semantic version tag for manual release (e.g. v1.0.0). Leave empty for build-only."
+        description: "Optional version tag (e.g. v1.0.0). Leave empty to auto-generate v1.0.<run_number>."
         required: false
         default: ""
 
@@ -31,15 +34,13 @@ jobs:
         run: |
           if ("${{ github.event_name }}" -eq "push" -and "${{ github.ref_type }}" -eq "tag") {
             $tag = "${{ github.ref_name }}"
-            echo "tag=$tag" >> $env:GITHUB_OUTPUT
-            echo "should_release=true" >> $env:GITHUB_OUTPUT
           } elseif ("${{ inputs.release_tag }}" -ne "") {
-            echo "tag=${{ inputs.release_tag }}" >> $env:GITHUB_OUTPUT
-            echo "should_release=true" >> $env:GITHUB_OUTPUT
+            $tag = "${{ inputs.release_tag }}"
           } else {
-            echo "tag=dev-${{ github.run_number }}" >> $env:GITHUB_OUTPUT
-            echo "should_release=false" >> $env:GITHUB_OUTPUT
+            $tag = "v1.0.${{ github.run_number }}"
           }
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "should_release=true" >> $env:GITHUB_OUTPUT
 
       - name: 3. Setup Python 3.11
         uses: actions/setup-python@v5
@@ -59,8 +60,9 @@ jobs:
           $vlcVersion = "3.0.21"
           $vlcUrl = "https://get.videolan.org/vlc/$vlcVersion/win64/vlc-$vlcVersion-win64.zip"
           $zipPath = "$env:TEMP\vlc-win64.zip"
-          Invoke-WebRequest -Uri $vlcUrl -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\vlc-extract" -Force
+          curl.exe -L --retry 3 -o $zipPath $vlcUrl
+          if ($LASTEXITCODE -ne 0) { throw "Failed to download LibVLC" }
+          7z x $zipPath "-o$env:TEMP\vlc-extract" -y | Out-Null
           New-Item -ItemType Directory -Force -Path "vendor\vlc" | Out-Null
           $srcVlc = "$env:TEMP\vlc-extract\vlc-$vlcVersion"
           Copy-Item "$srcVlc\libvlc.dll" "vendor\vlc\" -Force
@@ -159,30 +161,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.build-windows.outputs.version_tag }}
         run: |
-          NOTES=$(cat <<'EOF'
-          ## GENDEV Worship Media Player — ${{ needs.build-windows.outputs.version_tag }}
+          {
+            echo "## GENDEV Worship Media Player — $TAG"
+            echo ""
+            echo "Professional Multimedia Control for Worship (Windows 10 / Windows 11 x64)."
+            echo ""
+            echo "### Included Downloads"
+            echo "- \`GENDEV Worship Media Player Portable.exe\` — Single-file portable executable"
+            echo "- \`GENDEV Worship Media Player Setup.exe\` — Windows installer with desktop shortcut"
+            echo "- \`GENDEV Worship Media Player.zip\` — Portable directory bundle"
+            echo "- \`SHA256SUMS.txt\` — SHA256 verification checksums"
+          } > release_notes.md
 
-          Professional Multimedia Control for Worship (Windows 10 / Windows 11 x64).
-
-          ### Included Downloads
-          - `GENDEV Worship Media Player Portable.exe` — Single-file portable executable (no installation required)
-          - `GENDEV Worship Media Player Setup.exe` — Windows installer with desktop shortcut
-          - `GENDEV Worship Media Player.zip` — Portable directory bundle (`Config/`, `Playlists/`, `MediaLibrary/`, `Cache/`, `Thumbnails/`, `Logs/`, `Backups/`)
-          - `SHA256SUMS.txt` — SHA256 verification checksums
-
-          ### Highlights
-          - Dual Display / Projector fullscreen output with hot-plug HDMI recovery
-          - Smart Fade Out / Fade In, Auto-Fade at End, and Audio Crossfade
-          - Black Screen & Freeze Frame (audio continues smoothly)
-          - Background Music automation & Custom Media Library scanner
-          EOF
+          assets=(
+            "release_artifacts/GENDEV Worship Media Player Portable.exe"
+            "release_artifacts/GENDEV Worship Media Player Setup.exe"
+            "release_artifacts/GENDEV Worship Media Player.zip"
+            "release_artifacts/SHA256SUMS.txt"
           )
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — updating assets without duplicating release."
-            gh release upload "$TAG" release_artifacts/* --clobber
+            echo "Release $TAG already exists — uploading EXE and ZIP assets."
+            gh release upload "$TAG" "${assets[@]}" --clobber
           else
-            gh release create "$TAG" release_artifacts/* \
+            gh release create "$TAG" "${assets[@]}" \
               --title "GENDEV Worship Media Player $TAG" \
-              --notes "$NOTES"
+              --notes-file release_notes.md
           fi
