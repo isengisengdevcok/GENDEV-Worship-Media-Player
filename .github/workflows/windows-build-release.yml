@@ -26,7 +26,7 @@ jobs:
 
     steps:
       - name: 1. Checkout Source Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 2. Resolve Version Metadata
         id: meta
@@ -43,7 +43,7 @@ jobs:
           echo "should_release=true" >> $env:GITHUB_OUTPUT
 
       - name: 3. Setup Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -58,13 +58,20 @@ jobs:
         shell: pwsh
         run: |
           $vlcVersion = "3.0.21"
-          $vlcUrl = "https://get.videolan.org/vlc/$vlcVersion/win64/vlc-$vlcVersion-win64.zip"
+          $vlcUrl = "https://download.videolan.org/pub/videolan/vlc/$vlcVersion/win64/vlc-$vlcVersion-win64.zip"
           $zipPath = "$env:TEMP\vlc-win64.zip"
-          curl.exe -L --retry 3 -o $zipPath $vlcUrl
+          curl.exe -fSL --retry 3 -o $zipPath $vlcUrl
           if ($LASTEXITCODE -ne 0) { throw "Failed to download LibVLC" }
-          7z x $zipPath "-o$env:TEMP\vlc-extract" -y | Out-Null
+
+          $extractDir = "$env:TEMP\vlc-extract"
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $extractDir)
+
           New-Item -ItemType Directory -Force -Path "vendor\vlc" | Out-Null
-          $srcVlc = "$env:TEMP\vlc-extract\vlc-$vlcVersion"
+          $srcVlc = "$extractDir\vlc-$vlcVersion"
+          if (-not (Test-Path "$srcVlc\libvlc.dll")) { throw "libvlc.dll not found in extracted archive" }
+
           Copy-Item "$srcVlc\libvlc.dll" "vendor\vlc\" -Force
           Copy-Item "$srcVlc\libvlccore.dll" "vendor\vlc\" -Force
           Copy-Item "$srcVlc\plugins" "vendor\vlc\plugins" -Recurse -Force
@@ -72,26 +79,32 @@ jobs:
       - name: 6. Source Code Verification & Unit Tests
         shell: pwsh
         run: |
-          python -m compileall desktop
-          python -m unittest discover -s desktop/tests -p "test_*.py" -v
+          $env:PYTHONPATH = "."
+          python -m compileall -q desktop
+          python -m unittest discover -s desktop/tests -t . -p "test_*.py" -v
 
       - name: 7. Build Portable EXE & Bundle via PyInstaller
         shell: pwsh
         run: |
           pyinstaller --clean --noconfirm gendev.spec
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 
       - name: 8. Build Windows Installer EXE via Inno Setup
         shell: pwsh
         run: |
-          $isccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $isccCmd = Get-Command iscc.exe -ErrorAction SilentlyContinue
+          $isccPath = if ($isccCmd) { $isccCmd.Source } else { "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
           if (-not (Test-Path $isccPath)) {
             choco install innosetup -y --no-progress
+            $isccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           }
           & $isccPath "installer\gendev_setup.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup build failed" }
 
       - name: 9. Verify Build Artifacts & Package Distribution ZIP + SHA256
         shell: pwsh
         run: |
+          if (Test-Path "release_artifacts") { Remove-Item "release_artifacts" -Recurse -Force }
           New-Item -ItemType Directory -Force -Path "release_artifacts" | Out-Null
 
           $portable = "dist\GENDEV Worship Media Player Portable.exe"
@@ -104,6 +117,7 @@ jobs:
 
           # Prepare Portable ZIP folder layout
           $zipStaging = "dist\zip_staging\GENDEV"
+          if (Test-Path $zipStaging) { Remove-Item $zipStaging -Recurse -Force }
           New-Item -ItemType Directory -Force -Path $zipStaging | Out-Null
           Copy-Item $portable "$zipStaging\GENDEV.exe" -Force
           Copy-Item "README.md" "$zipStaging\README.md" -Force
@@ -116,16 +130,18 @@ jobs:
             throw "Missing distribution ZIP!"
           }
 
-          # Generate SHA256 Checksums
-          Get-ChildItem "release_artifacts\*" -File | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            "$hash  $($_.Name)"
-          } | Out-File -Encoding utf8 "release_artifacts\SHA256SUMS.txt"
+          # Compute SHA256 into a temp list outside release_artifacts so Out-File never locks a scanned file
+          $artifactFiles = @(Get-ChildItem "release_artifacts" -File | Sort-Object Name)
+          $checksumLines = foreach ($file in $artifactFiles) {
+            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($file.Name)"
+          }
+          $checksumLines | Set-Content -Encoding utf8 -Path "release_artifacts\SHA256SUMS.txt"
 
-          Get-ChildItem "release_artifacts"
+          Get-ChildItem "release_artifacts" -File | Format-Table Name, Length
 
       - name: 10. Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gendev-windows-dist
           path: release_artifacts/*
@@ -140,10 +156,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download Verified Windows Build Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: gendev-windows-dist
           path: release_artifacts
