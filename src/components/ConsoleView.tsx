@@ -98,6 +98,7 @@ interface ConsoleViewProps {
   onAddToActivePlaylist: (itemId: string) => void;
   onQueueNext: (itemId: string) => void;
   onAddFolderPicker: () => void;
+  onBrowseNativeFiles?: () => void;
   onAddFiles: (files: FileList | File[]) => void;
   onRefreshLibrary: () => void;
   isScanning: boolean;
@@ -170,6 +171,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
   onAddToActivePlaylist,
   onQueueNext,
   onAddFolderPicker,
+  onBrowseNativeFiles,
   onAddFiles,
   onRefreshLibrary,
   isScanning,
@@ -285,7 +287,10 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => {
+                if (onBrowseNativeFiles) onBrowseNativeFiles();
+                else fileInputRef.current?.click();
+              }}
               title="Browse Media Files"
               className="p-1.5 rounded-md bg-white/[0.05] hover:bg-white/[0.12] text-slate-200 cursor-pointer"
             >

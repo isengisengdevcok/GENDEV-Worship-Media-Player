@@ -1,4 +1,11 @@
 import React, { useEffect, useState } from 'react';
+import {
+  isTauriRuntime,
+  tauriCloseProjector,
+  tauriEmit,
+  tauriListen,
+  tauriToggleCurrentWindowFullscreen,
+} from '../services/tauriBridge';
 import { DEFAULT_SETTINGS } from '../services/storage';
 import { ProjectorSyncState } from '../types/media';
 import { ProjectorStage } from './ProjectorStage';
@@ -53,11 +60,25 @@ export const ProjectorWindowApp: React.FC = () => {
       if (ev.data?.type === 'SYNC_STATE' && ev.data.payload) {
         setStageState(ev.data.payload as ProjectorSyncState);
       } else if (ev.data?.type === 'EXIT_PROJECTOR') {
-        window.close();
+        if (isTauriRuntime()) {
+          void tauriCloseProjector();
+        } else {
+          window.close();
+        }
       }
     };
 
     channel.postMessage({ type: 'PROJECTOR_READY' });
+    void tauriEmit('gendev-projector-ready', true);
+
+    let unlistenSync: (() => void) | null = null;
+    if (isTauriRuntime()) {
+      void tauriListen<ProjectorSyncState>('gendev-projector-sync', (payload) => {
+        if (payload) setStageState(payload);
+      }).then((fn) => {
+        unlistenSync = fn;
+      });
+    }
 
     const onStorage = (e: StorageEvent) => {
       if (e.key === 'gendev_projector_snapshot' && e.newValue) {
@@ -74,15 +95,22 @@ export const ProjectorWindowApp: React.FC = () => {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !document.fullscreenElement) {
-        channel.postMessage({ type: 'PROJECTOR_CLOSED' });
-        window.close();
-        // If browser blocks closing a non-scripted tab, navigate cleanly back to Operator Console
-        window.setTimeout(() => {
-          if (!window.closed) {
-            window.location.href = window.location.pathname;
-          }
-        }, 120);
+      if (e.key === 'Escape') {
+        if (isTauriRuntime()) {
+          channel.postMessage({ type: 'PROJECTOR_CLOSED' });
+          void tauriCloseProjector();
+          return;
+        }
+        if (!document.fullscreenElement) {
+          channel.postMessage({ type: 'PROJECTOR_CLOSED' });
+          window.close();
+          // If browser blocks closing a non-scripted tab, navigate cleanly back to Operator Console
+          window.setTimeout(() => {
+            if (!window.closed) {
+              window.location.href = window.location.pathname;
+            }
+          }, 120);
+        }
       }
     };
 
@@ -96,6 +124,7 @@ export const ProjectorWindowApp: React.FC = () => {
     document.addEventListener('fullscreenchange', onFsChange);
 
     return () => {
+      unlistenSync?.();
       channel.postMessage({ type: 'PROJECTOR_CLOSED' });
       channel.close();
       window.removeEventListener('storage', onStorage);
@@ -107,6 +136,11 @@ export const ProjectorWindowApp: React.FC = () => {
 
   const toggleFullscreen = async () => {
     try {
+      if (isTauriRuntime()) {
+        const nextFs = await tauriToggleCurrentWindowFullscreen();
+        setIsFullscreen(nextFs);
+        return;
+      }
       if (document.fullscreenElement) {
         await document.exitFullscreen();
       } else {

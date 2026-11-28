@@ -9,6 +9,8 @@ import { SettingsView } from './components/SettingsView';
 import { audioEngine } from './services/audioEngine';
 import {
   buildMediaItemFromFile,
+  buildMediaItemFromTauriDiskFile,
+  makeTauriMediaId,
   resolveSavedHandleItems,
   scanDirectoryHandle,
 } from './services/fileScanner';
@@ -20,6 +22,21 @@ import {
   saveFileHandle,
   savePersistedState,
 } from './services/storage';
+import {
+  isTauriRuntime,
+  tauriCloseProjector,
+  tauriEmit,
+  tauriInspectDiskFiles,
+  tauriListen,
+  tauriOpenProjector,
+  tauriPickMediaFiles,
+  tauriPickMediaFolder,
+  tauriPickSingleMediaFile,
+  tauriReadTextFile,
+  tauriSaveBackupFile,
+  tauriScanFolder,
+  toTauriAssetUrl,
+} from './services/tauriBridge';
 import {
   AppSettings,
   LibraryFolder,
@@ -370,7 +387,7 @@ function OperatorConsoleApp() {
     projectorStateRef.current = projectorState;
   }, [projectorState]);
 
-  // Setup BroadcastChannel for Dual Display Monitor 2
+  // Setup BroadcastChannel & Tauri Events for Dual Display Monitor 2
   useEffect(() => {
     const ch = new BroadcastChannel('gendev_projector_v1');
     broadcastRef.current = ch;
@@ -384,7 +401,25 @@ function OperatorConsoleApp() {
       }
     };
 
+    let unlistenReady: (() => void) | null = null;
+    let unlistenClosed: (() => void) | null = null;
+    if (isTauriRuntime()) {
+      void tauriListen('gendev-projector-ready', () => {
+        setProjectorWindowOpen(true);
+        void tauriEmit('gendev-projector-sync', projectorStateRef.current);
+      }).then((fn) => {
+        unlistenReady = fn;
+      });
+      void tauriListen('gendev-projector-closed', () => {
+        setProjectorWindowOpen(false);
+      }).then((fn) => {
+        unlistenClosed = fn;
+      });
+    }
+
     return () => {
+      unlistenReady?.();
+      unlistenClosed?.();
       ch.close();
       broadcastRef.current = null;
     };
@@ -398,7 +433,10 @@ function OperatorConsoleApp() {
       // ignore quota
     }
     broadcastRef.current?.postMessage({ type: 'SYNC_STATE', payload: projectorState });
-  }, [projectorState]);
+    if (isTauriRuntime() && projectorWindowOpen) {
+      void tauriEmit('gendev-projector-sync', projectorState);
+    }
+  }, [projectorState, projectorWindowOpen]);
 
   // Listen for single-screen fullscreen exit
   useEffect(() => {
@@ -866,20 +904,40 @@ function OperatorConsoleApp() {
     });
   }, [getDeckEl]);
 
-  // Open Monitor 2 Projector Window via real anchor click (no window.open)
-  const handleOpenProjectorWindow = useCallback(() => {
+  // Open Monitor 2 Projector Window (native Tauri multi-monitor window or browser tab)
+  const handleOpenProjectorWindow = useCallback(async () => {
     try {
-      localStorage.setItem('gendev_projector_snapshot', JSON.stringify(projectorState));
+      localStorage.setItem('gendev_projector_snapshot', JSON.stringify(projectorStateRef.current));
     } catch {
       // ignore
     }
+    if (isTauriRuntime()) {
+      try {
+        const res = await tauriOpenProjector(settings.display.selectedScreenId);
+        setProjectorWindowOpen(res.opened);
+        await tauriEmit('gendev-projector-sync', projectorStateRef.current);
+        if (res.mode === 'single-windowed') {
+          setScanStatus(
+            'Hanya 1 layar terdeteksi: Projector dibuka sebagai jendela aman (klik 2x fullscreen, tekan ESC untuk keluar).'
+          );
+          window.setTimeout(() => setScanStatus(''), 5000);
+        }
+      } catch (err) {
+        setPlaybackError(`Failed to open Projector window: ${String(err)}`);
+      }
+      return;
+    }
     setProjectorWindowOpen(true);
     projectorLinkRef.current?.click();
-  }, [projectorState]);
+  }, [settings.display.selectedScreenId]);
 
-  const handleExitProjector = useCallback(() => {
+  const handleExitProjector = useCallback(async () => {
     broadcastRef.current?.postMessage({ type: 'EXIT_PROJECTOR' });
     setProjectorWindowOpen(false);
+    if (isTauriRuntime()) {
+      await tauriCloseProjector().catch(() => {});
+      return;
+    }
     if (document.fullscreenElement) {
       void document.exitFullscreen().catch(() => {});
     }
@@ -1200,8 +1258,238 @@ function OperatorConsoleApp() {
     [currentMediaId]
   );
 
+  const handleImportNativePaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0 || isScanningRef.current) return;
+      isScanningRef.current = true;
+      setIsScanning(true);
+      setScanStatus(`Scanning ${paths.length} dropped/selected path(s)...`);
+
+      try {
+        const existingMap = new Map(mediaItems.map((m) => [m.id, m]));
+        const folderId = 'folder-local-imports';
+        const folderName = 'Local Disk Imports';
+        const newItems: MediaItem[] = [];
+        const newFolders: LibraryFolder[] = [];
+        let attachedSrtCount = 0;
+
+        // 1. Subtitles (.srt / .vtt)
+        const nonSubPaths: string[] = [];
+        for (const p of paths) {
+          const ext = getExtension(p);
+          if (ext === 'srt' || ext === 'vtt') {
+            try {
+              const text = await tauriReadTextFile(p);
+              const cues = parseSubtitles(text);
+              const fileName = p.split(/[\\/]/).pop() || p;
+              if (currentMediaId && cues.length > 0) {
+                setMediaItems((prev) =>
+                  prev.map((it) =>
+                    it.id === currentMediaId
+                      ? { ...it, subtitleCues: cues, subtitleName: fileName }
+                      : it
+                  )
+                );
+                attachedSrtCount++;
+              }
+            } catch {
+              // ignore unreadable srt
+            }
+          } else {
+            nonSubPaths.push(p);
+          }
+        }
+
+        // 2. Inspect individual media files directly on disk
+        if (nonSubPaths.length > 0) {
+          const fileInfos = await tauriInspectDiskFiles(nonSubPaths);
+          const matchedFilePaths = new Set(fileInfos.map((f) => f.absolutePath));
+
+          for (const df of fileInfos) {
+            const existing = existingMap.get(makeTauriMediaId(df.absolutePath));
+            newItems.push(await buildMediaItemFromTauriDiskFile(df, folderId, folderName, existing));
+          }
+
+          // 3. Any remaining path that wasn't a media file might be a folder
+          for (const candidate of nonSubPaths) {
+            if (matchedFilePaths.has(candidate)) continue;
+            try {
+              const scanned = await tauriScanFolder(candidate, true);
+              const dirName = candidate.split(/[\\/]/).filter(Boolean).pop() || candidate;
+              const dirId = `tauri_${makeTauriMediaId(candidate)}`;
+              for (const df of scanned) {
+                const existing = existingMap.get(makeTauriMediaId(df.absolutePath));
+                newItems.push(await buildMediaItemFromTauriDiskFile(df, dirId, dirName, existing));
+              }
+              newFolders.push({
+                id: dirId,
+                name: dirName,
+                pathLabel: candidate,
+                autoScan: true,
+                recursive: true,
+                lastScannedAt: Date.now(),
+                itemCount: scanned.length,
+                sourceType: 'tauri-path',
+              });
+            } catch {
+              // Not a directory or unsupported file
+            }
+          }
+        }
+
+        if (newItems.length > 0) {
+          let nextListSnapshot: MediaItem[] = [];
+          setMediaItems((prev) => {
+            const map = new Map<string, MediaItem>();
+            for (const existing of prev) map.set(existing.id, existing);
+            for (const item of newItems) map.set(item.id, item);
+            nextListSnapshot = Array.from(map.values());
+            return nextListSnapshot;
+          });
+
+          setFolders((prev) => {
+            const map = new Map<string, LibraryFolder>();
+            for (const f of prev) map.set(f.id, f);
+            for (const nf of newFolders) map.set(nf.id, nf);
+            const hasLooseFiles = newItems.some((i) => i.folderId === folderId);
+            if (hasLooseFiles && !map.has(folderId)) {
+              map.set(folderId, {
+                id: folderId,
+                name: folderName,
+                pathLabel: 'Local Disk / Drag & Drop',
+                autoScan: false,
+                recursive: true,
+                lastScannedAt: Date.now(),
+                itemCount: newItems.filter((i) => i.folderId === folderId).length,
+                sourceType: 'virtual',
+              });
+            }
+            return Array.from(map.values()).map((f) => ({
+              ...f,
+              itemCount:
+                f.id === 'folder-builtin'
+                  ? nextListSnapshot.filter((it) => it.folderId === f.id).length
+                  : nextListSnapshot.filter((it) => it.folderId === f.id).length,
+            }));
+          });
+        }
+
+        setScanStatus(
+          attachedSrtCount > 0
+            ? `Attached ${attachedSrtCount} subtitle(s) & added ${newItems.length} disk file(s).`
+            : `Ready: ${newItems.length} media file(s) linked directly from disk.`
+        );
+      } finally {
+        isScanningRef.current = false;
+        setIsScanning(false);
+        window.setTimeout(() => setScanStatus(''), 4000);
+      }
+    },
+    [currentMediaId, mediaItems]
+  );
+
+  // Listen for native Tauri drag-and-drop paths from Windows Explorer
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let unlistenDrop: (() => void) | null = null;
+    void tauriListen<string[]>('gendev-files-dropped', (paths) => {
+      if (Array.isArray(paths) && paths.length > 0) {
+        void handleImportNativePaths(paths);
+      }
+    }).then((fn) => {
+      unlistenDrop = fn;
+    });
+    return () => {
+      unlistenDrop?.();
+    };
+  }, [handleImportNativePaths]);
+
+  const handleBrowseNativeFiles = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    const paths = await tauriPickMediaFiles();
+    if (paths.length > 0) {
+      await handleImportNativePaths(paths);
+    }
+  }, [handleImportNativePaths]);
+
+  const handleLocateMissingNative = useCallback(async (itemId: string) => {
+    if (!isTauriRuntime()) return;
+    const newPath = await tauriPickSingleMediaFile();
+    if (!newPath) return;
+    const diskFiles = await tauriInspectDiskFiles([newPath]);
+    const df = diskFiles[0];
+    setMediaItems((prev) =>
+      prev.map((it) =>
+        it.id === itemId
+          ? {
+              ...it,
+              url: toTauriAssetUrl(newPath),
+              missing: false,
+              sizeBytes: df?.sizeBytes ?? it.sizeBytes,
+              absolutePath: newPath,
+              relativePath: df?.relativePath ?? it.relativePath,
+              sourceType: 'tauri-path',
+            }
+          : it
+      )
+    );
+  }, []);
+
   const handleAddFolderPicker = useCallback(async () => {
     if (isScanningRef.current) return;
+
+    if (isTauriRuntime()) {
+      const folderPath = await tauriPickMediaFolder();
+      if (!folderPath) return;
+
+      isScanningRef.current = true;
+      setIsScanning(true);
+      setScanStatus(`Scanning "${folderPath}" recursively...`);
+
+      try {
+        const dirName = folderPath.split(/[\\/]/).filter(Boolean).pop() || folderPath;
+        const folderId = `tauri_${makeTauriMediaId(folderPath)}`;
+        const diskFiles = await tauriScanFolder(folderPath, true);
+        const existingMap = new Map(mediaItems.map((m) => [m.id, m]));
+        const scanned: MediaItem[] = [];
+        for (const df of diskFiles) {
+          const existing = existingMap.get(makeTauriMediaId(df.absolutePath));
+          scanned.push(await buildMediaItemFromTauriDiskFile(df, folderId, dirName, existing));
+        }
+
+        const newFolder: LibraryFolder = {
+          id: folderId,
+          name: dirName,
+          pathLabel: folderPath,
+          autoScan: true,
+          recursive: true,
+          lastScannedAt: Date.now(),
+          itemCount: scanned.length,
+          sourceType: 'tauri-path',
+        };
+
+        setFolders((prev) => [...prev.filter((f) => f.id !== folderId), newFolder]);
+        setMediaItems((prev) => {
+          const map = new Map<string, MediaItem>();
+          for (const item of scanned) map.set(item.id, item);
+          for (const existing of prev) {
+            if (existing.folderId !== folderId && !map.has(existing.id)) {
+              map.set(existing.id, existing);
+            }
+          }
+          return Array.from(map.values());
+        });
+        setScanStatus(`Added "${dirName}" (${scanned.length} media files).`);
+      } catch (err) {
+        setPlaybackError(`Folder scan error: ${String(err)}`);
+      } finally {
+        isScanningRef.current = false;
+        setIsScanning(false);
+        window.setTimeout(() => setScanStatus(''), 4000);
+      }
+      return;
+    }
+
     const win = window as unknown as {
       showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
     };
@@ -1258,7 +1546,7 @@ function OperatorConsoleApp() {
       isScanningRef.current = false;
       setIsScanning(false);
     }
-  }, []);
+  }, [mediaItems]);
 
   const handleRefreshLibrary = useCallback(async () => {
     if (isScanningRef.current) return;
@@ -1267,9 +1555,27 @@ function OperatorConsoleApp() {
     setScanStatus('Refreshing folders & verifying file paths...');
 
     try {
-      // Re-scan any saved directory handles without duplicating existing entries
+      const existingMap = new Map(mediaItems.map((m) => [m.id, m]));
       const rescannedByFolder = new Map<string, MediaItem[]>();
+
       for (const folder of folders) {
+        if (folder.sourceType === 'tauri-path' && isTauriRuntime()) {
+          try {
+            const diskFiles = await tauriScanFolder(folder.pathLabel, folder.recursive);
+            const itemsInDir: MediaItem[] = [];
+            for (const df of diskFiles) {
+              const existing = existingMap.get(makeTauriMediaId(df.absolutePath));
+              itemsInDir.push(
+                await buildMediaItemFromTauriDiskFile(df, folder.id, folder.name, existing)
+              );
+            }
+            rescannedByFolder.set(folder.id, itemsInDir);
+          } catch {
+            // Drive temporarily disconnected; preserve existing entries and mark missing below
+          }
+          continue;
+        }
+
         if (folder.sourceType !== 'directory-handle') continue;
         const handle = await getFileHandle<FileSystemDirectoryHandle>(`folder_${folder.id}`);
         if (!handle) continue;
@@ -1292,7 +1598,6 @@ function OperatorConsoleApp() {
       const mergedMap = new Map<string, MediaItem>();
 
       for (const item of res.updated) {
-        // Skip old entries of folders we just cleanly rescanned
         if (rescannedByFolder.has(item.folderId)) continue;
         mergedMap.set(item.id, item);
       }
@@ -1304,6 +1609,7 @@ function OperatorConsoleApp() {
       }
 
       const finalItems = Array.from(mergedMap.values());
+      const finalMissingCount = finalItems.filter((it) => it.missing).length;
       setMediaItems(finalItems);
       setFolders((prev) =>
         prev.map((f) => ({
@@ -1314,8 +1620,8 @@ function OperatorConsoleApp() {
       );
 
       setScanStatus(
-        res.missingCount > 0
-          ? `Scan complete: ${res.missingCount} file(s) missing or offline.`
+        finalMissingCount > 0
+          ? `Scan complete: ${finalMissingCount} file(s) missing or offline.`
           : `Library refreshed (${finalItems.length} unique media files).`
       );
     } finally {
@@ -1324,6 +1630,19 @@ function OperatorConsoleApp() {
       window.setTimeout(() => setScanStatus(''), 4000);
     }
   }, [folders, mediaItems]);
+
+  const didAutoScanStartupRef = useRef(false);
+  useEffect(() => {
+    if (!hydrated || didAutoScanStartupRef.current) return;
+    didAutoScanStartupRef.current = true;
+    if (
+      isTauriRuntime() &&
+      settings.autoScanOnStartup &&
+      folders.some((f) => f.sourceType === 'tauri-path' && f.autoScan)
+    ) {
+      void handleRefreshLibrary();
+    }
+  }, [folders, handleRefreshLibrary, hydrated, settings.autoScanOnStartup]);
 
   const handleLocateMissingFile = useCallback(async (itemId: string, file: File) => {
     const url = URL.createObjectURL(file);
@@ -1359,7 +1678,7 @@ function OperatorConsoleApp() {
   );
 
   // Backup / Restore JSON
-  const handleExportBackup = useCallback(() => {
+  const handleExportBackup = useCallback(async () => {
     const payload = {
       app: 'GENDEV Worship Media Player',
       exportedAt: new Date().toISOString(),
@@ -1367,7 +1686,12 @@ function OperatorConsoleApp() {
       playlists,
       folders,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const json = JSON.stringify(payload, null, 2);
+    if (isTauriRuntime()) {
+      await tauriSaveBackupFile(json).catch(() => {});
+      return;
+    }
+    const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1662,6 +1986,7 @@ function OperatorConsoleApp() {
           }}
           onQueueNext={(itemId) => setManualQueueIds((q) => [...q, itemId])}
           onAddFolderPicker={handleAddFolderPicker}
+          onBrowseNativeFiles={isTauriRuntime() ? handleBrowseNativeFiles : undefined}
           onAddFiles={handleAddFiles}
           onRefreshLibrary={handleRefreshLibrary}
           isScanning={isScanning}
@@ -1701,6 +2026,7 @@ function OperatorConsoleApp() {
           isScanning={isScanning}
           scanStatus={scanStatus}
           onAddFolderPicker={handleAddFolderPicker}
+          onBrowseNativeFiles={isTauriRuntime() ? handleBrowseNativeFiles : undefined}
           onAddFiles={handleAddFiles}
           onRefreshLibrary={handleRefreshLibrary}
           onRemoveFolder={(folderId) => {
@@ -1713,6 +2039,7 @@ function OperatorConsoleApp() {
             );
           }}
           onLocateMissingFile={handleLocateMissingFile}
+          onLocateMissingNative={isTauriRuntime() ? handleLocateMissingNative : undefined}
           onPlayMedia={(item) => {
             playMediaItem(item);
             setActiveTab('console');

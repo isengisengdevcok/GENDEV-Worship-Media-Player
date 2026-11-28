@@ -12,6 +12,7 @@ import {
   Upload,
   Volume2,
 } from 'lucide-react';
+import { isTauriRuntime, tauriListDisplays } from '../services/tauriBridge';
 import { AppSettings, LogoPosition, Playlist, ShortcutMap } from '../types/media';
 import { BUILTIN_CHURCH_LOGO } from '../utils/sampleMediaGenerator';
 
@@ -62,6 +63,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   }, []);
 
   const detectDisplays = async () => {
+    if (isTauriRuntime()) {
+      try {
+        const tauriScreens = await tauriListDisplays();
+        if (tauriScreens.length > 0) {
+          setScreens(
+            tauriScreens.map((s) => ({
+              id: s.id,
+              label: s.label,
+              isPrimary: s.isPrimary,
+              width: s.width,
+              height: s.height,
+            }))
+          );
+          return;
+        }
+      } catch {
+        // Fallback to browser detection
+      }
+    }
+
     try {
       const win = window as unknown as {
         getScreenDetails?: () => Promise<{
@@ -866,20 +887,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             <div className="p-3.5 rounded-lg bg-[#0A0D14] border border-white/[0.07] space-y-2 text-xs text-slate-300">
               <p className="font-semibold text-slate-100">
-                Included Windows PySide6 + LibVLC + GitHub Actions Repository Files
+                Lightweight Tauri v2 (Rust + WebView2) Windows Desktop Release Kit
               </p>
               <p className="text-slate-400 leading-relaxed">
-                This project includes the complete native Windows desktop source tree under{' '}
-                <code className="text-indigo-300 font-mono">desktop/</code>, PyInstaller spec{' '}
-                <code className="text-indigo-300 font-mono">gendev.spec</code>, Inno Setup
-                script <code className="text-indigo-300 font-mono">installer/gendev_setup.iss</code>
-                , and automated Windows release workflow{' '}
+                This application compiles natively via <code className="text-indigo-300 font-mono">src-tauri/</code>{' '}
+                (Tauri v2 + Rust) using Windows WebView2 so the standalone Portable &amp; Setup
+                EXEs stay compact (~5–15 MB) while matching this Operator Console 1:1. Tag a
+                release like <code className="text-indigo-300 font-mono">v1.0.0</code> on GitHub to
+                build and publish via{' '}
                 <code className="text-indigo-300 font-mono">
                   .github/workflows/windows-build-release.yml
                 </code>
-                . Push to GitHub and tag <code className="text-indigo-300 font-mono">v1.0.0</code>{' '}
-                to compile the Windows Portable &amp; Setup EXEs on GitHub&apos;s{' '}
-                <code className="text-indigo-300 font-mono">windows-latest</code> runner.
+                .
               </p>
             </div>
           </section>

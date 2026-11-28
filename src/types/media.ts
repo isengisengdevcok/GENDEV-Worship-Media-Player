@@ -24,7 +24,7 @@ export interface MediaItem {
   folderName: string;
   relativePath: string;
   absolutePath: string;
-  sourceType: 'builtin' | 'file' | 'handle';
+  sourceType: 'builtin' | 'file' | 'handle' | 'tauri-path';
   url?: string;
   thumbnailUrl?: string;
   subtitleCues?: SubtitleCue[];
@@ -43,7 +43,7 @@ export interface LibraryFolder {
   recursive: boolean;
   lastScannedAt: number;
   itemCount: number;
-  sourceType: 'builtin' | 'directory-handle' | 'virtual';
+  sourceType: 'builtin' | 'directory-handle' | 'virtual' | 'tauri-path';
 }
 
 export interface Playlist {

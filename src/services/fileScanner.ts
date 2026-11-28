@@ -1,13 +1,19 @@
 import { LibraryFolder, MediaItem, MediaKind } from '../types/media';
 import { detectMediaKind, getExtension } from '../utils/formatters';
-import { saveFileHandle, getFileHandle } from './storage';
+import { getFileHandle, saveFileHandle } from './storage';
+import {
+  isTauriRuntime,
+  TauriScannedDiskFile,
+  tauriVerifyFilesExist,
+  toTauriAssetUrl,
+} from './tauriBridge';
 
 /**
  * Extracts real duration, resolution, and a lightweight video thumbnail
  * without copying the source file or overloading low-RAM hardware.
  */
 export async function probeMediaMetadata(
-  file: File,
+  file: File | null,
   kind: MediaKind,
   url: string
 ): Promise<{ durationSec: number; resolution?: string; thumbnailUrl?: string }> {
@@ -137,6 +143,54 @@ export async function buildMediaItemFromFile(
   };
 }
 
+export function makeTauriMediaId(absolutePath: string): string {
+  const normalized = absolutePath.replace(/\\/g, '/').toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < normalized.length; i++) {
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `tauri_${(hash >>> 0).toString(36)}`;
+}
+
+export async function buildMediaItemFromTauriDiskFile(
+  diskFile: TauriScannedDiskFile,
+  folderId: string,
+  folderName: string,
+  existingItem?: MediaItem
+): Promise<MediaItem> {
+  const url = toTauriAssetUrl(diskFile.absolutePath);
+  const meta =
+    existingItem && existingItem.durationSec > 0
+      ? {
+          durationSec: existingItem.durationSec,
+          resolution: existingItem.resolution,
+          thumbnailUrl: existingItem.thumbnailUrl,
+        }
+      : await probeMediaMetadata(null, diskFile.kind, url);
+
+  return {
+    id: makeTauriMediaId(diskFile.absolutePath),
+    name: diskFile.name,
+    kind: diskFile.kind,
+    format: diskFile.format,
+    sizeBytes: diskFile.sizeBytes,
+    durationSec: meta.durationSec,
+    resolution: meta.resolution,
+    folderId,
+    folderName,
+    relativePath: diskFile.relativePath,
+    absolutePath: diskFile.absolutePath,
+    sourceType: 'tauri-path',
+    url,
+    thumbnailUrl: meta.thumbnailUrl,
+    subtitleCues: existingItem?.subtitleCues,
+    subtitleName: existingItem?.subtitleName,
+    missing: false,
+    addedAt: existingItem?.addedAt || Date.now(),
+  };
+}
+
 /**
  * Recursively scans a FileSystemDirectoryHandle without copying files.
  */
@@ -187,9 +241,37 @@ export async function resolveSavedHandleItems(
   let missingCount = 0;
   const updated: MediaItem[] = [];
 
+  const tauriItems = items.filter((i) => i.sourceType === 'tauri-path');
+  const tauriExistsMap = new Map<string, boolean>();
+  if (tauriItems.length > 0 && isTauriRuntime()) {
+    try {
+      const checks = await tauriVerifyFilesExist(tauriItems.map((t) => t.absolutePath));
+      tauriItems.forEach((t, idx) => {
+        tauriExistsMap.set(t.id, Boolean(checks[idx]));
+      });
+    } catch {
+      // ignore if IPC unavailable
+    }
+  }
+
   for (const item of items) {
     if (item.sourceType === 'builtin') {
       updated.push(item);
+      continue;
+    }
+
+    if (item.sourceType === 'tauri-path') {
+      const exists = tauriExistsMap.has(item.id) ? tauriExistsMap.get(item.id) : true;
+      if (!exists) {
+        missingCount++;
+        updated.push({ ...item, missing: true });
+      } else {
+        updated.push({
+          ...item,
+          url: toTauriAssetUrl(item.absolutePath),
+          missing: false,
+        });
+      }
       continue;
     }
 

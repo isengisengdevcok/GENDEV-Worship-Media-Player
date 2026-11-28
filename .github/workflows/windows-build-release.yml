@@ -1,4 +1,4 @@
-name: Build and Release GENDEV Worship Media Player (Windows)
+name: Build and Release GENDEV Worship Media Player (Windows Tauri)
 
 on:
   push:
@@ -42,84 +42,54 @@ jobs:
           echo "tag=$tag" >> $env:GITHUB_OUTPUT
           echo "should_release=true" >> $env:GITHUB_OUTPUT
 
-      - name: 3. Setup Python 3.11
-        uses: actions/setup-python@v6
+      - name: 3. Setup Node.js 24
+        uses: actions/setup-node@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
+          node-version: "24"
 
-      - name: 4. Install Python Dependencies
+      - name: 4. Setup Rust Stable Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 5. Rust Build Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: 6. Install Dependencies & Verify Frontend
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          npm install
+          npm run lint
+          npm run build
 
-      - name: 5. Download and Prepare LibVLC 64-bit Windows Runtime
+      - name: 7. Build Lightweight Tauri v2 Portable & Setup EXEs
         shell: pwsh
         run: |
-          $vlcVersion = "3.0.21"
-          $vlcUrl = "https://download.videolan.org/pub/videolan/vlc/$vlcVersion/win64/vlc-$vlcVersion-win64.zip"
-          $zipPath = "$env:TEMP\vlc-win64.zip"
-          curl.exe -fSL --retry 3 -o $zipPath $vlcUrl
-          if ($LASTEXITCODE -ne 0) { throw "Failed to download LibVLC" }
+          npx tauri build --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw "Tauri Windows build failed" }
 
-          $extractDir = "$env:TEMP\vlc-extract"
-          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $extractDir)
-
-          New-Item -ItemType Directory -Force -Path "vendor\vlc" | Out-Null
-          $srcVlc = "$extractDir\vlc-$vlcVersion"
-          if (-not (Test-Path "$srcVlc\libvlc.dll")) { throw "libvlc.dll not found in extracted archive" }
-
-          Copy-Item "$srcVlc\libvlc.dll" "vendor\vlc\" -Force
-          Copy-Item "$srcVlc\libvlccore.dll" "vendor\vlc\" -Force
-          Copy-Item "$srcVlc\plugins" "vendor\vlc\plugins" -Recurse -Force
-
-      - name: 6. Source Code Verification & Unit Tests
-        shell: pwsh
-        run: |
-          $env:PYTHONPATH = "."
-          python -m compileall -q desktop
-          python -m unittest discover -s desktop/tests -t . -p "test_*.py" -v
-
-      - name: 7. Build Portable EXE & Bundle via PyInstaller
-        shell: pwsh
-        run: |
-          pyinstaller --clean --noconfirm gendev.spec
-          if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
-
-      - name: 8. Build Windows Installer EXE via Inno Setup
-        shell: pwsh
-        run: |
-          $isccCmd = Get-Command iscc.exe -ErrorAction SilentlyContinue
-          $isccPath = if ($isccCmd) { $isccCmd.Source } else { "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
-          if (-not (Test-Path $isccPath)) {
-            choco install innosetup -y --no-progress
-            $isccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          }
-          & $isccPath "installer\gendev_setup.iss"
-          if ($LASTEXITCODE -ne 0) { throw "Inno Setup build failed" }
-
-      - name: 9. Verify Build Artifacts & Package Distribution ZIP + SHA256
+      - name: 8. Verify Build Artifacts & Package Distribution ZIP + SHA256
         shell: pwsh
         run: |
           if (Test-Path "release_artifacts") { Remove-Item "release_artifacts" -Recurse -Force }
           New-Item -ItemType Directory -Force -Path "release_artifacts" | Out-Null
 
-          $portable = "dist\GENDEV Worship Media Player Portable.exe"
-          $setup = "dist\installer\GENDEV Worship Media Player Setup.exe"
-          if (-not (Test-Path $portable)) { throw "Missing $portable" }
-          if (-not (Test-Path $setup)) { throw "Missing $setup" }
+          $portableSrc = "src-tauri\target\release\gendev-worship-media-player.exe"
+          $setupSrc = Get-ChildItem "src-tauri\target\release\bundle\nsis\*-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 
-          Copy-Item $portable "release_artifacts\" -Force
-          Copy-Item $setup "release_artifacts\" -Force
+          if (-not (Test-Path $portableSrc)) { throw "Missing Tauri standalone EXE at $portableSrc" }
+          if (-not $setupSrc) { throw "Missing NSIS Setup EXE under src-tauri\target\release\bundle\nsis" }
+
+          $portableDest = "release_artifacts\GENDEV Worship Media Player Portable.exe"
+          $setupDest = "release_artifacts\GENDEV Worship Media Player Setup.exe"
+          Copy-Item $portableSrc $portableDest -Force
+          Copy-Item $setupSrc.FullName $setupDest -Force
 
           # Prepare Portable ZIP folder layout
-          $zipStaging = "dist\zip_staging\GENDEV"
-          if (Test-Path $zipStaging) { Remove-Item $zipStaging -Recurse -Force }
+          $zipStaging = "dist_zip\GENDEV"
+          if (Test-Path $zipStaging) { Remove-Item "dist_zip" -Recurse -Force }
           New-Item -ItemType Directory -Force -Path $zipStaging | Out-Null
-          Copy-Item $portable "$zipStaging\GENDEV.exe" -Force
+          Copy-Item $portableSrc "$zipStaging\GENDEV.exe" -Force
           Copy-Item "README.md" "$zipStaging\README.md" -Force
           foreach ($dir in @("Config","Playlists","MediaLibrary","Cache","Thumbnails","Logs","Backups")) {
             New-Item -ItemType Directory -Force -Path "$zipStaging\$dir" | Out-Null
@@ -130,7 +100,6 @@ jobs:
             throw "Missing distribution ZIP!"
           }
 
-          # Compute SHA256 into a temp list outside release_artifacts so Out-File never locks a scanned file
           $artifactFiles = @(Get-ChildItem "release_artifacts" -File | Sort-Object Name)
           $checksumLines = foreach ($file in $artifactFiles) {
             $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
@@ -140,7 +109,7 @@ jobs:
 
           Get-ChildItem "release_artifacts" -File | Format-Table Name, Length
 
-      - name: 10. Upload Build Artifacts
+      - name: 9. Upload Build Artifacts
         uses: actions/upload-artifact@v7
         with:
           name: gendev-windows-dist
@@ -180,11 +149,11 @@ jobs:
           {
             echo "## GENDEV Worship Media Player — $TAG"
             echo ""
-            echo "Professional Multimedia Control for Worship (Windows 10 / Windows 11 x64)."
+            echo "Lightweight Tauri v2 (Rust + WebView2) Windows Desktop Edition — exact 1:1 parity with Operator Console Preview."
             echo ""
             echo "### Included Downloads"
-            echo "- \`GENDEV Worship Media Player Portable.exe\` — Single-file portable executable"
-            echo "- \`GENDEV Worship Media Player Setup.exe\` — Windows installer with desktop shortcut"
+            echo "- \`GENDEV Worship Media Player Portable.exe\` — Lightweight standalone portable executable (~5–15 MB)"
+            echo "- \`GENDEV Worship Media Player Setup.exe\` — Windows NSIS installer with desktop shortcut"
             echo "- \`GENDEV Worship Media Player.zip\` — Portable directory bundle"
             echo "- \`SHA256SUMS.txt\` — SHA256 verification checksums"
           } > release_notes.md

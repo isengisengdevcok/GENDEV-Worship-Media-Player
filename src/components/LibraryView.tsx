@@ -6,6 +6,7 @@ import {
   FileAudio,
   FilePlus,
   FileVideo,
+  FolderOpen,
   FolderPlus,
   FolderSearch,
   ListPlus,
@@ -15,6 +16,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
+import { isTauriRuntime, tauriOpenInExplorer } from '../services/tauriBridge';
 import { LibraryFolder, MediaItem, Playlist } from '../types/media';
 import { formatBytes, formatDuration } from '../utils/formatters';
 
@@ -26,11 +28,13 @@ interface LibraryViewProps {
   isScanning: boolean;
   scanStatus: string;
   onAddFolderPicker: () => void;
+  onBrowseNativeFiles?: () => void;
   onAddFiles: (files: FileList | File[]) => void;
   onRefreshLibrary: () => void;
   onRemoveFolder: (folderId: string) => void;
   onToggleFolderAutoScan: (folderId: string) => void;
   onLocateMissingFile: (itemId: string, file: File) => void;
+  onLocateMissingNative?: (itemId: string) => void;
   onPlayMedia: (item: MediaItem) => void;
   onAddToPlaylist: (playlistId: string, itemId: string) => void;
   onDeleteCustomItem: (itemId: string) => void;
@@ -44,11 +48,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   isScanning,
   scanStatus,
   onAddFolderPicker,
+  onBrowseNativeFiles,
   onAddFiles,
   onRefreshLibrary,
   onRemoveFolder,
   onToggleFolderAutoScan,
   onLocateMissingFile,
+  onLocateMissingNative,
   onPlayMedia,
   onAddToPlaylist,
   onDeleteCustomItem,
@@ -188,7 +194,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => {
+              if (onBrowseNativeFiles) onBrowseNativeFiles();
+              else fileInputRef.current?.click();
+            }}
             className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] text-slate-100 text-xs font-medium border border-white/[0.08] transition-colors whitespace-nowrap cursor-pointer"
           >
             <FilePlus className="w-4 h-4 shrink-0" />
@@ -198,7 +207,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
         <button
           type="button"
-          onClick={() => folderFallbackRef.current?.click()}
+          onClick={() => {
+            if (isTauriRuntime()) onAddFolderPicker();
+            else folderFallbackRef.current?.click();
+          }}
           className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white/[0.03] hover:bg-white/[0.07] text-slate-300 text-xs border border-white/[0.06] transition-colors whitespace-nowrap cursor-pointer"
         >
           <FolderSearch className="w-3.5 h-3.5 shrink-0" />
@@ -450,8 +462,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          setLocatingItemId(item.id);
-                          locateInputRef.current?.click();
+                          if (onLocateMissingNative && item.sourceType === 'tauri-path') {
+                            onLocateMissingNative(item.id);
+                          } else {
+                            setLocatingItemId(item.id);
+                            locateInputRef.current?.click();
+                          }
                         }}
                         className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-medium whitespace-nowrap cursor-pointer"
                       >
@@ -477,6 +493,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       <ListPlus className="w-3.5 h-3.5" />
                       <span>Queue</span>
                     </button>
+
+                    {isTauriRuntime() && item.sourceType === 'tauri-path' && (
+                      <button
+                        type="button"
+                        onClick={() => void tauriOpenInExplorer(item.absolutePath)}
+                        title="Open in Windows Explorer"
+                        className="p-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.1] text-slate-300 cursor-pointer"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" />
+                      </button>
+                    )}
 
                     <button
                       type="button"
