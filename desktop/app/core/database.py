@@ -23,15 +23,25 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "crossfade_enabled": True,
     "crossfade_duration": 3,
     "preserve_aspect_ratio": True,
+    "show_subtitles_on_projector": True,
+    "selected_screen_index": 1,
     "bgm_enabled": True,
     "bgm_volume": 38,
     "bgm_auto_fade_on_video": True,
     "bgm_auto_resume_after_video": True,
     "bgm_simultaneous": False,
+    "bgm_playlist_name": "Background Music Ibadah",
     "logo_visible": True,
+    "logo_path": "",
     "logo_position": "bottom-right",
     "logo_size": 72,
     "logo_opacity": 0.72,
+    "countdown_duration_sec": 300,
+    "countdown_label": "Worship Service Starts In",
+    "countdown_show_on_projector": False,
+    "repeat_mode": "all",
+    "shuffle_enabled": False,
+    "last_playlist_id": None,
 }
 
 DEFAULT_PLAYLIST_NAMES = [
@@ -51,6 +61,7 @@ class WorshipDatabase:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys = ON;")
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -141,16 +152,39 @@ class WorshipDatabase:
         )
         self.conn.commit()
 
-    def add_folder(self, path: str, auto_scan: bool = True, recursive: bool = True) -> None:
+    def add_folder(self, path: str, auto_scan: bool = True, recursive: bool = True) -> int:
+        normalized = str(Path(path).resolve()) if Path(path).exists() else path
         self.conn.execute(
             "INSERT OR IGNORE INTO library_folders (path, auto_scan, recursive) VALUES (?, ?, ?)",
-            (path, int(auto_scan), int(recursive)),
+            (normalized, int(auto_scan), int(recursive)),
         )
         self.conn.commit()
+        row = self.conn.execute(
+            "SELECT id FROM library_folders WHERE path = ?", (normalized,)
+        ).fetchone()
+        return int(row["id"])
 
     def list_folders(self) -> list[dict[str, Any]]:
         rows = self.conn.execute("SELECT * FROM library_folders ORDER BY id ASC").fetchall()
         return [dict(r) for r in rows]
+
+    def remove_folder(self, folder_id: int) -> None:
+        self.conn.execute("DELETE FROM library_folders WHERE id = ?", (folder_id,))
+        self.conn.commit()
+
+    def toggle_folder_auto_scan(self, folder_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT auto_scan FROM library_folders WHERE id = ?", (folder_id,)
+        ).fetchone()
+        if not row:
+            return True
+        next_val = 0 if int(row["auto_scan"]) == 1 else 1
+        self.conn.execute(
+            "UPDATE library_folders SET auto_scan = ? WHERE id = ?",
+            (next_val, folder_id),
+        )
+        self.conn.commit()
+        return bool(next_val)
 
     def upsert_media(
         self,
@@ -164,6 +198,8 @@ class WorshipDatabase:
         thumbnail_path: str = "",
     ) -> int:
         now = time.time()
+        p = Path(file_path)
+        normalized_path = str(p.resolve()) if p.exists() else file_path
         self.conn.execute(
             """
             INSERT INTO media_items (file_path, name, kind, ext, size_bytes, duration_ms, resolution, thumbnail_path, missing, added_at)
@@ -173,13 +209,27 @@ class WorshipDatabase:
                 size_bytes=excluded.size_bytes,
                 missing=0
             """,
-            (file_path, name, kind, ext, size_bytes, duration_ms, resolution, thumbnail_path, now),
+            (normalized_path, name, kind, ext, size_bytes, duration_ms, resolution, thumbnail_path, now),
         )
         self.conn.commit()
         row = self.conn.execute(
-            "SELECT id FROM media_items WHERE file_path = ?", (file_path,)
+            "SELECT id FROM media_items WHERE file_path = ?", (normalized_path,)
         ).fetchone()
         return int(row["id"])
+
+    def list_media(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM media_items ORDER BY kind DESC, name COLLATE NOCASE ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_media(self, media_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM media_items WHERE id = ?", (media_id,)).fetchone()
+        return dict(row) if row else None
+
+    def delete_media(self, media_id: int) -> None:
+        self.conn.execute("DELETE FROM media_items WHERE id = ?", (media_id,))
+        self.conn.commit()
 
     def verify_all_media_existence(self) -> int:
         """Checks every indexed file on disk without deleting playlist references."""
@@ -208,6 +258,35 @@ class WorshipDatabase:
         rows = self.conn.execute("SELECT * FROM playlists ORDER BY id ASC").fetchall()
         return [dict(r) for r in rows]
 
+    def create_playlist(self, name: str, is_bgm: bool = False) -> int:
+        trimmed = name.strip()
+        if not trimmed:
+            raise ValueError("Playlist name cannot be empty")
+        now = time.time()
+        cur = self.conn.execute(
+            "INSERT INTO playlists (name, is_bgm, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (trimmed, int(is_bgm), now, now),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def rename_playlist(self, playlist_id: int, new_name: str) -> None:
+        trimmed = new_name.strip()
+        if not trimmed:
+            return
+        self.conn.execute(
+            "UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?",
+            (trimmed, time.time(), playlist_id),
+        )
+        self.conn.commit()
+
+    def delete_playlist(self, playlist_id: int) -> None:
+        count_row = self.conn.execute("SELECT COUNT(*) AS cnt FROM playlists").fetchone()
+        if count_row and int(count_row["cnt"]) <= 1:
+            return
+        self.conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+        self.conn.commit()
+
     def add_to_playlist(self, playlist_id: int, media_id: int) -> None:
         row = self.conn.execute(
             "SELECT COALESCE(MAX(position), -1) AS max_pos FROM playlist_items WHERE playlist_id = ?",
@@ -217,6 +296,10 @@ class WorshipDatabase:
         self.conn.execute(
             "INSERT INTO playlist_items (playlist_id, media_id, position) VALUES (?, ?, ?)",
             (playlist_id, media_id, next_pos),
+        )
+        self.conn.execute(
+            "UPDATE playlists SET updated_at = ? WHERE id = ?",
+            (time.time(), playlist_id),
         )
         self.conn.commit()
 
@@ -245,6 +328,74 @@ class WorshipDatabase:
             (time.time(), playlist_id),
         )
         self.conn.commit()
+
+    def export_backup_dict(self) -> dict[str, Any]:
+        return {
+            "app": "GENDEV Worship Media Player",
+            "exported_at": time.time(),
+            "settings": self.get_settings(),
+            "folders": self.list_folders(),
+            "playlists": [
+                {
+                    "name": pl["name"],
+                    "is_bgm": bool(pl["is_bgm"]),
+                    "file_paths": [
+                        item["file_path"] for item in self.get_playlist_items(int(pl["id"]))
+                    ],
+                }
+                for pl in self.list_playlists()
+            ],
+        }
+
+    def import_backup_dict(self, payload: dict[str, Any]) -> bool:
+        if not isinstance(payload, dict) or "settings" not in payload:
+            return False
+        settings = payload.get("settings", {})
+        if isinstance(settings, dict):
+            for k, v in settings.items():
+                self.set_setting(str(k), v)
+        folders = payload.get("folders", [])
+        if isinstance(folders, list):
+            for f in folders:
+                if isinstance(f, dict) and f.get("path"):
+                    self.add_folder(
+                        str(f["path"]),
+                        auto_scan=bool(f.get("auto_scan", True)),
+                        recursive=bool(f.get("recursive", True)),
+                    )
+        playlists = payload.get("playlists", [])
+        if isinstance(playlists, list):
+            existing = {pl["name"]: int(pl["id"]) for pl in self.list_playlists()}
+            audio_exts = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a"}
+            for pl in playlists:
+                if not isinstance(pl, dict) or not pl.get("name"):
+                    continue
+                pl_name = str(pl["name"]).strip()
+                if not pl_name:
+                    continue
+                pl_id = existing.get(pl_name)
+                if pl_id is None:
+                    pl_id = self.create_playlist(pl_name, is_bgm=bool(pl.get("is_bgm", False)))
+                    existing[pl_name] = pl_id
+                file_paths = pl.get("file_paths", [])
+                if isinstance(file_paths, list):
+                    ordered_ids: list[int] = []
+                    for fp in file_paths:
+                        p = Path(str(fp))
+                        ext = p.suffix.lower()
+                        kind = "audio" if ext in audio_exts else "video"
+                        size_bytes = p.stat().st_size if p.is_file() else 0
+                        m_id = self.upsert_media(
+                            file_path=str(fp),
+                            name=p.stem or p.name,
+                            kind=kind,
+                            ext=ext.lstrip(".").upper() or "MEDIA",
+                            size_bytes=size_bytes,
+                        )
+                        ordered_ids.append(m_id)
+                    if ordered_ids:
+                        self.replace_playlist_order(pl_id, ordered_ids)
+        return True
 
     def close(self) -> None:
         self.conn.close()

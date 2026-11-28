@@ -95,6 +95,59 @@ class TestGendevCore(unittest.TestCase):
         self.assertEqual(cues[0].text, "Selamat Datang")
         self.assertAlmostEqual(cues[1].start_sec, 5.0)
 
+    def test_refresh_deduplication_folder_playlist_crud_and_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db = WorshipDatabase(tmp_path / "Config" / "gendev.db")
+            media_file = tmp_path / "worship_song.mp4"
+            media_file.write_bytes(b"video-bytes")
+
+            # Simulate repeated folder/refresh upserts of the exact same path
+            id1 = db.upsert_media(
+                file_path=str(media_file),
+                name="worship_song",
+                kind="video",
+                ext="MP4",
+                size_bytes=media_file.stat().st_size,
+            )
+            id2 = db.upsert_media(
+                file_path=str(media_file.resolve()),
+                name="worship_song",
+                kind="video",
+                ext="MP4",
+                size_bytes=media_file.stat().st_size,
+            )
+            self.assertEqual(id1, id2)
+            self.assertEqual(len(db.list_media()), 1)
+
+            # Folder management
+            folder_id = db.add_folder(str(tmp_path))
+            folders = db.list_folders()
+            self.assertEqual(len(folders), 1)
+            db.toggle_folder_auto_scan(folder_id)
+            self.assertEqual(db.list_folders()[0]["auto_scan"], 0)
+
+            # Playlist CRUD
+            pl_id = db.create_playlist("Youth Service")
+            db.rename_playlist(pl_id, "Youth Worship Night")
+            db.add_to_playlist(pl_id, id1)
+            self.assertEqual(len(db.get_playlist_items(pl_id)), 1)
+
+            # Backup export & import
+            db.set_setting("fade_out_duration", 10)
+            payload = db.export_backup_dict()
+            db.delete_playlist(pl_id)
+            db.remove_folder(folder_id)
+            db.delete_media(id1)
+            self.assertEqual(len(db.list_media()), 0)
+
+            self.assertTrue(db.import_backup_dict(payload))
+            self.assertEqual(len(db.list_media()), 1)
+            self.assertEqual(len(db.list_folders()), 1)
+            self.assertEqual(db.get_settings()["fade_out_duration"], 10)
+            self.assertIn("Youth Worship Night", {p["name"] for p in db.list_playlists()})
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,10 +15,16 @@ export const ProjectorStage: React.FC<ProjectorStageProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const freezeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [videoError, setVideoError] = React.useState(false);
+
+  useEffect(() => {
+    setVideoError(false);
+  }, [state.mediaUrl, state.mediaId]);
 
   const isVideoFile =
     state.mediaKind === 'video' &&
     Boolean(state.mediaUrl) &&
+    !videoError &&
     !state.mediaUrl?.endsWith('.jpg') &&
     !state.mediaUrl?.endsWith('.png');
 
@@ -94,6 +100,7 @@ export const ProjectorStage: React.FC<ProjectorStageProps> = ({
           playsInline
           muted={muted}
           preload="auto"
+          onError={() => setVideoError(true)}
         />
       ) : state.thumbnailUrl ? (
         <img

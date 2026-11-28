@@ -18,6 +18,7 @@ import {
   Music,
   Pause,
   Play,
+  RefreshCw,
   Repeat,
   Repeat1,
   RotateCcw,
@@ -29,9 +30,11 @@ import {
   Square,
   Sunrise,
   Sunset,
+  Trash2,
   Upload,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import {
   AppSettings,
@@ -96,7 +99,16 @@ interface ConsoleViewProps {
   onQueueNext: (itemId: string) => void;
   onAddFolderPicker: () => void;
   onAddFiles: (files: FileList | File[]) => void;
+  onRefreshLibrary: () => void;
+  isScanning: boolean;
   onLoadSrtForCurrent: (file: File) => void;
+  onClearSrtForCurrent: () => void;
+  onStepSeek: (deltaSec: number) => void;
+  playbackError: string;
+  onDismissError: () => void;
+  manualQueueCount: number;
+  onClearManualQueue: () => void;
+  onRemoveFromActivePlaylist: (index: number) => void;
   onToggleCountdownRun: () => void;
   onResetCountdown: (sec?: number) => void;
   onToggleCountdownProjector: () => void;
@@ -159,7 +171,16 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
   onQueueNext,
   onAddFolderPicker,
   onAddFiles,
+  onRefreshLibrary,
+  isScanning,
   onLoadSrtForCurrent,
+  onClearSrtForCurrent,
+  onStepSeek,
+  playbackError,
+  onDismissError,
+  manualQueueCount,
+  onClearManualQueue,
+  onRemoveFromActivePlaylist,
   onToggleCountdownRun,
   onResetCountdown,
   onToggleCountdownProjector,
@@ -256,8 +277,9 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
             <button
               type="button"
               onClick={onAddFolderPicker}
+              disabled={isScanning}
               title="Add Local Folder"
-              className="p-1.5 rounded-md bg-white/[0.05] hover:bg-white/[0.12] text-slate-200 cursor-pointer"
+              className="p-1.5 rounded-md bg-white/[0.05] hover:bg-white/[0.12] text-slate-200 cursor-pointer disabled:opacity-45"
             >
               <FolderPlus className="w-3.5 h-3.5" />
             </button>
@@ -268,6 +290,15 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               className="p-1.5 rounded-md bg-white/[0.05] hover:bg-white/[0.12] text-slate-200 cursor-pointer"
             >
               <FilePlus className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={onRefreshLibrary}
+              disabled={isScanning}
+              title="Refresh Library (No Duplicates)"
+              className="p-1.5 rounded-md bg-white/[0.05] hover:bg-white/[0.12] text-slate-200 cursor-pointer disabled:opacity-45"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
@@ -409,7 +440,24 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
 
         {/* 2. OPERATOR SCREEN CONTROLS (Strictly Below & Outside Video — Never Shown on Dual Projector) */}
         <section className="bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 space-y-3 shrink-0">
-          <div className="flex items-center justify-between">
+          {playbackError && (
+            <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="truncate">{playbackError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={onDismissError}
+                title="Dismiss warning"
+                className="p-1 rounded hover:bg-white/[0.08] text-amber-200 shrink-0 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-2">
             <span className="font-display text-[11px] font-semibold uppercase tracking-wider text-slate-400">
               Operator Screen Controls (Laptop Only)
             </span>
@@ -424,6 +472,17 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                 <Captions className="w-3.5 h-3.5" />
                 <span>SRT</span>
               </button>
+
+              {currentMedia?.subtitleName && (
+                <button
+                  type="button"
+                  onClick={onClearSrtForCurrent}
+                  title="Remove active SRT subtitle"
+                  className="p-1 rounded-md bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
 
               <select
                 value={playbackRate}
@@ -452,10 +511,19 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
 
           {/* Seek Scrubber & Live Output Meter */}
           <div className="space-y-1.5">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <span className="font-mono-tabular text-xs text-slate-300 w-12">
                 {formatDuration(currentTime)}
               </span>
+              <button
+                type="button"
+                disabled={!currentMedia}
+                onClick={() => onStepSeek(-5)}
+                title="Rewind 5 seconds"
+                className="px-1.5 py-0.5 rounded bg-white/[0.05] hover:bg-white/[0.1] font-mono-tabular text-[11px] text-slate-300 disabled:opacity-40 cursor-pointer"
+              >
+                -5s
+              </button>
               <input
                 type="range"
                 min={0}
@@ -466,6 +534,15 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                 disabled={!currentMedia}
                 className="flex-1 studio-slider disabled:opacity-40"
               />
+              <button
+                type="button"
+                disabled={!currentMedia}
+                onClick={() => onStepSeek(5)}
+                title="Forward 5 seconds"
+                className="px-1.5 py-0.5 rounded bg-white/[0.05] hover:bg-white/[0.1] font-mono-tabular text-[11px] text-slate-300 disabled:opacity-40 cursor-pointer"
+              >
+                +5s
+              </button>
               <span className="font-mono-tabular text-xs text-slate-400 w-12 text-right">
                 {formatDuration(duration)}
               </span>
@@ -908,11 +985,23 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
             </span>
           </div>
 
-          <div className="px-2.5 py-2 rounded-lg bg-[#0A0D14] border border-white/[0.07] text-xs">
-            <span className="text-slate-400">Next Up: </span>
-            <span className="text-slate-100 font-medium">
-              {nextMedia ? nextMedia.name : 'End of Playlist'}
-            </span>
+          <div className="px-2.5 py-2 rounded-lg bg-[#0A0D14] border border-white/[0.07] text-xs flex items-center justify-between gap-2">
+            <div className="min-w-0 truncate">
+              <span className="text-slate-400">Next Up: </span>
+              <span className="text-slate-100 font-medium">
+                {nextMedia ? nextMedia.name : 'End of Playlist'}
+              </span>
+            </div>
+            {manualQueueCount > 0 && (
+              <button
+                type="button"
+                onClick={onClearManualQueue}
+                title="Clear manual queue"
+                className="px-2 py-0.5 rounded bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-200 text-[10px] font-medium shrink-0 cursor-pointer whitespace-nowrap"
+              >
+                Queue ({manualQueueCount}) Clear
+              </button>
+            )}
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-0.5">
@@ -1038,6 +1127,14 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                           Next
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => onRemoveFromActivePlaylist(index)}
+                        title="Remove from playlist"
+                        className="p-1 rounded hover:bg-rose-500/20 text-slate-500 hover:text-rose-300 cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
                     </div>
                   </div>
                 );

@@ -15,7 +15,9 @@ import {
 import {
   createDefaultPlaylists,
   DEFAULT_SETTINGS,
+  getFileHandle,
   loadPersistedState,
+  saveFileHandle,
   savePersistedState,
 } from './services/storage';
 import {
@@ -73,7 +75,9 @@ function OperatorConsoleApp() {
   const [currentMediaId, setCurrentMediaId] = useState<string | null>('builtin-sanctuary-loop');
 
   const [isScanning, setIsScanning] = useState(false);
+  const isScanningRef = useRef(false);
   const [scanStatus, setScanStatus] = useState('');
+  const [playbackError, setPlaybackError] = useState('');
   const [hydrated, setHydrated] = useState(false);
 
   // Playback State (Dual-deck A/B for true audio crossfade)
@@ -361,6 +365,11 @@ function OperatorConsoleApp() {
     ]
   );
 
+  const projectorStateRef = useRef<ProjectorSyncState>(projectorState);
+  useEffect(() => {
+    projectorStateRef.current = projectorState;
+  }, [projectorState]);
+
   // Setup BroadcastChannel for Dual Display Monitor 2
   useEffect(() => {
     const ch = new BroadcastChannel('gendev_projector_v1');
@@ -369,7 +378,7 @@ function OperatorConsoleApp() {
     ch.onmessage = (ev: MessageEvent) => {
       if (ev.data?.type === 'PROJECTOR_READY') {
         setProjectorWindowOpen(true);
-        ch.postMessage({ type: 'SYNC_STATE', payload: projectorState });
+        ch.postMessage({ type: 'SYNC_STATE', payload: projectorStateRef.current });
       } else if (ev.data?.type === 'PROJECTOR_CLOSED') {
         setProjectorWindowOpen(false);
       }
@@ -379,7 +388,6 @@ function OperatorConsoleApp() {
       ch.close();
       broadcastRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Broadcast state updates to Monitor 2
@@ -460,6 +468,7 @@ function OperatorConsoleApp() {
     (item: MediaItem, playlistIndex?: number) => {
       if (item.missing || !item.url) return;
 
+      setPlaybackError('');
       audioEngine.ensureContext();
       autoFadeTriggeredRef.current = false;
       setFadeProgress({ active: false, direction: 'out', progress: 0, currentVolPct: 100 });
@@ -674,7 +683,9 @@ function OperatorConsoleApp() {
 
     let nextIdx = activeIndex + 1;
     if (shuffleEnabled && list.length > 1) {
-      nextIdx = Math.floor(Math.random() * list.length);
+      do {
+        nextIdx = Math.floor(Math.random() * list.length);
+      } while (nextIdx === activeIndex);
     } else if (nextIdx >= list.length) {
       if (repeatMode === 'all') nextIdx = 0;
       else {
@@ -709,12 +720,18 @@ function OperatorConsoleApp() {
     const list = activePlaylist?.itemIds || [];
     if (list.length === 0) return;
 
+    if (activeIndex === 0 && repeatMode === 'off') {
+      if (el) el.currentTime = 0;
+      setCurrentTime(0);
+      return;
+    }
+
     const prevIdx = activeIndex - 1 < 0 ? list.length - 1 : activeIndex - 1;
     const prevItem = mediaMap.get(list[prevIdx]);
     if (prevItem && !prevItem.missing) {
       playMediaItem(prevItem, prevIdx);
     }
-  }, [activeIndex, activePlaylist?.itemIds, getDeckEl, mediaMap, playMediaItem]);
+  }, [activeIndex, activePlaylist?.itemIds, getDeckEl, mediaMap, playMediaItem, repeatMode]);
 
   // SMART FADE OUT (Main Signature Feature)
   const handleSmartFadeOut = useCallback(() => {
@@ -961,6 +978,29 @@ function OperatorConsoleApp() {
     ]
   );
 
+  // Image / still-slide playback progression timer
+  useEffect(() => {
+    if (!isPlaying || !currentMedia) return;
+    const isImageSlide =
+      !currentMedia.url ||
+      currentMedia.url.endsWith('.jpg') ||
+      currentMedia.url.endsWith('.png');
+    if (!isImageSlide) return;
+
+    const interval = window.setInterval(() => {
+      setCurrentTime((prev) => {
+        const next = prev + 0.25;
+        if (next >= duration) {
+          window.clearInterval(interval);
+          handleDeckEnded(activeDeck);
+          return duration;
+        }
+        return next;
+      });
+    }, 250);
+    return () => window.clearInterval(interval);
+  }, [activeDeck, currentMedia, duration, handleDeckEnded, isPlaying]);
+
   // Background Music Controls
   const handleToggleBgm = useCallback(() => {
     const bgmEl = bgmAudioRef.current;
@@ -1111,8 +1151,28 @@ function OperatorConsoleApp() {
       }
 
       if (newItems.length > 0) {
+        let updatedFolderCount = newItems.length;
+        setMediaItems((prev) => {
+          const map = new Map<string, MediaItem>();
+          for (const existing of prev) map.set(existing.id, existing);
+          for (const item of newItems) {
+            if (!Array.from(map.values()).some((m) => m.absolutePath === item.absolutePath)) {
+              map.set(item.id, item);
+            }
+          }
+          const nextList = Array.from(map.values());
+          updatedFolderCount = nextList.filter((m) => m.folderId === folderId).length;
+          return nextList;
+        });
+
         setFolders((prev) => {
-          if (prev.some((f) => f.id === folderId)) return prev;
+          if (prev.some((f) => f.id === folderId)) {
+            return prev.map((f) =>
+              f.id === folderId
+                ? { ...f, lastScannedAt: Date.now(), itemCount: updatedFolderCount }
+                : f
+            );
+          }
           return [
             ...prev,
             {
@@ -1122,16 +1182,10 @@ function OperatorConsoleApp() {
               autoScan: false,
               recursive: true,
               lastScannedAt: Date.now(),
-              itemCount: newItems.length,
+              itemCount: updatedFolderCount,
               sourceType: 'virtual',
             },
           ];
-        });
-
-        setMediaItems((prev) => {
-          const existingIds = new Set(prev.map((p) => p.id));
-          const deduped = newItems.filter((n) => !existingIds.has(n.id));
-          return [...deduped, ...prev];
         });
       }
 
@@ -1147,6 +1201,7 @@ function OperatorConsoleApp() {
   );
 
   const handleAddFolderPicker = useCallback(async () => {
+    if (isScanningRef.current) return;
     const win = window as unknown as {
       showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
     };
@@ -1158,7 +1213,9 @@ function OperatorConsoleApp() {
 
     try {
       const dirHandle = await win.showDirectoryPicker();
-      const folderId = `dir_${dirHandle.name}_${Date.now()}`;
+      const folderId = `dir_${dirHandle.name}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+      await saveFileHandle(`folder_${folderId}`, dirHandle);
+
       const newFolder: LibraryFolder = {
         id: folderId,
         name: dirHandle.name,
@@ -1170,6 +1227,7 @@ function OperatorConsoleApp() {
         sourceType: 'directory-handle',
       };
 
+      isScanningRef.current = true;
       setIsScanning(true);
       setScanStatus(`Scanning "${dirHandle.name}" recursively...`);
 
@@ -1178,32 +1236,94 @@ function OperatorConsoleApp() {
       });
 
       newFolder.itemCount = scanned.length;
-      setFolders((prev) => [...prev, newFolder]);
-      setMediaItems((prev) => {
-        const existingIds = new Set(prev.map((p) => p.id));
-        return [...scanned.filter((s) => !existingIds.has(s.id)), ...prev];
+      setFolders((prev) => {
+        const filtered = prev.filter((f) => f.id !== folderId);
+        return [...filtered, newFolder];
       });
+      setMediaItems((prev) => {
+        const map = new Map<string, MediaItem>();
+        for (const item of scanned) map.set(item.id, item);
+        for (const existing of prev) {
+          if (existing.folderId !== folderId && !map.has(existing.id)) {
+            map.set(existing.id, existing);
+          }
+        }
+        return Array.from(map.values());
+      });
+      isScanningRef.current = false;
       setIsScanning(false);
       setScanStatus(`Added "${dirHandle.name}" (${scanned.length} media files).`);
       window.setTimeout(() => setScanStatus(''), 4000);
     } catch {
+      isScanningRef.current = false;
       setIsScanning(false);
     }
   }, []);
 
   const handleRefreshLibrary = useCallback(async () => {
+    if (isScanningRef.current) return;
+    isScanningRef.current = true;
     setIsScanning(true);
-    setScanStatus('Checking connected drives & verifying file paths...');
-    const res = await resolveSavedHandleItems(mediaItems);
-    setMediaItems(res.updated);
-    setIsScanning(false);
-    setScanStatus(
-      res.missingCount > 0
-        ? `Scan complete: ${res.missingCount} file(s) missing or offline.`
-        : 'All library media files verified.'
-    );
-    window.setTimeout(() => setScanStatus(''), 4000);
-  }, [mediaItems]);
+    setScanStatus('Refreshing folders & verifying file paths...');
+
+    try {
+      // Re-scan any saved directory handles without duplicating existing entries
+      const rescannedByFolder = new Map<string, MediaItem[]>();
+      for (const folder of folders) {
+        if (folder.sourceType !== 'directory-handle') continue;
+        const handle = await getFileHandle<FileSystemDirectoryHandle>(`folder_${folder.id}`);
+        if (!handle) continue;
+        try {
+          const perm = await (
+            handle as FileSystemDirectoryHandle & {
+              queryPermission?: (desc: { mode: string }) => Promise<string>;
+            }
+          ).queryPermission?.({ mode: 'read' });
+          if (perm === 'granted') {
+            const itemsInDir = await scanDirectoryHandle(handle, folder);
+            rescannedByFolder.set(folder.id, itemsInDir);
+          }
+        } catch {
+          // Folder temporarily inaccessible
+        }
+      }
+
+      const res = await resolveSavedHandleItems(mediaItems);
+      const mergedMap = new Map<string, MediaItem>();
+
+      for (const item of res.updated) {
+        // Skip old entries of folders we just cleanly rescanned
+        if (rescannedByFolder.has(item.folderId)) continue;
+        mergedMap.set(item.id, item);
+      }
+
+      for (const [, dirItems] of rescannedByFolder.entries()) {
+        for (const item of dirItems) {
+          mergedMap.set(item.id, item);
+        }
+      }
+
+      const finalItems = Array.from(mergedMap.values());
+      setMediaItems(finalItems);
+      setFolders((prev) =>
+        prev.map((f) => ({
+          ...f,
+          lastScannedAt: Date.now(),
+          itemCount: finalItems.filter((it) => it.folderId === f.id).length,
+        }))
+      );
+
+      setScanStatus(
+        res.missingCount > 0
+          ? `Scan complete: ${res.missingCount} file(s) missing or offline.`
+          : `Library refreshed (${finalItems.length} unique media files).`
+      );
+    } finally {
+      isScanningRef.current = false;
+      setIsScanning(false);
+      window.setTimeout(() => setScanStatus(''), 4000);
+    }
+  }, [folders, mediaItems]);
 
   const handleLocateMissingFile = useCallback(async (itemId: string, file: File) => {
     const url = URL.createObjectURL(file);
@@ -1283,6 +1403,14 @@ function OperatorConsoleApp() {
         preload="auto"
         onTimeUpdate={() => handleDeckTimeUpdate('A')}
         onEnded={() => handleDeckEnded('A')}
+        onError={() => {
+          if (activeDeck === 'A' && currentMedia) {
+            setPlaybackError(
+              `Format ${currentMedia.format} tidak didukung oleh codec browser; gunakan MP4/WebM/MOV di web atau aplikasi Desktop Windows (LibVLC) untuk MKV/AVI/WMV.`
+            );
+            setIsPlaying(false);
+          }
+        }}
       />
       <video
         ref={deckBRef}
@@ -1291,6 +1419,14 @@ function OperatorConsoleApp() {
         preload="auto"
         onTimeUpdate={() => handleDeckTimeUpdate('B')}
         onEnded={() => handleDeckEnded('B')}
+        onError={() => {
+          if (activeDeck === 'B' && currentMedia) {
+            setPlaybackError(
+              `Format ${currentMedia.format} tidak didukung oleh codec browser; gunakan MP4/WebM/MOV di web atau aplikasi Desktop Windows (LibVLC) untuk MKV/AVI/WMV.`
+            );
+            setIsPlaying(false);
+          }
+        }}
       />
       <audio
         ref={bgmAudioRef}
@@ -1304,7 +1440,6 @@ function OperatorConsoleApp() {
         ref={projectorLinkRef}
         href="?mode=projector"
         target="_blank"
-        rel="noopener noreferrer"
         className="hidden"
       >
         Projector Output
@@ -1313,6 +1448,11 @@ function OperatorConsoleApp() {
       {/* Single-Screen Fullscreen Container */}
       <div
         ref={singleFsRef}
+        onDoubleClick={() => {
+          if (document.fullscreenElement) {
+            void document.exitFullscreen().catch(() => {});
+          }
+        }}
         className={singleScreenFsActive ? 'fixed inset-0 z-50 bg-black' : 'hidden'}
       >
         {singleScreenFsActive && <ProjectorStage state={projectorState} muted={true} />}
@@ -1466,6 +1606,51 @@ function OperatorConsoleApp() {
             setRepeatMode((r) => (r === 'off' ? 'all' : r === 'all' ? 'one' : 'off'))
           }
           onToggleShuffle={() => setShuffleEnabled((s) => !s)}
+          playbackError={playbackError}
+          onDismissError={() => setPlaybackError('')}
+          manualQueueCount={manualQueueIds.length}
+          onClearManualQueue={() => setManualQueueIds([])}
+          onRemoveFromActivePlaylist={(index) => {
+            const nextLen = Math.max(0, activePlaylist.itemIds.length - 1);
+            setPlaylists((prev) =>
+              prev.map((pl) => {
+                if (pl.id !== activePlaylist.id) return pl;
+                const copy = [...pl.itemIds];
+                copy.splice(index, 1);
+                return { ...pl, itemIds: copy, updatedAt: Date.now() };
+              })
+            );
+            setActiveIndex((curr) => {
+              if (index < curr) return Math.max(0, curr - 1);
+              if (index === curr) return Math.max(0, Math.min(curr, nextLen - 1));
+              return curr;
+            });
+          }}
+          onClearSrtForCurrent={() => {
+            if (!currentMediaId) return;
+            setMediaItems((prev) =>
+              prev.map((it) =>
+                it.id === currentMediaId
+                  ? { ...it, subtitleCues: undefined, subtitleName: undefined }
+                  : it
+              )
+            );
+          }}
+          onStepSeek={(deltaSec) => {
+            const el = getDeckEl();
+            if (!el || !currentMedia) return;
+            const elDur = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : duration;
+            const nextSec = Math.max(0, Math.min(elDur, (el.currentTime || 0) + deltaSec));
+            el.currentTime = nextSec;
+            setCurrentTime(nextSec);
+            if (!settings.fade.autoFadeAtEndEnabled || elDur - nextSec > settings.fade.autoFadeAtEndSec + 0.5) {
+              audioEngine.cancelMainFade(el);
+              autoFadeTriggeredRef.current = false;
+              deckGainRef.current = 1;
+              audioEngine.setElementGainImmediate(el, 1);
+              setFadeProgress({ active: false, direction: 'out', progress: 0, currentVolPct: 100 });
+            }
+          }}
           onAddToActivePlaylist={(itemId) => {
             setPlaylists((prev) =>
               prev.map((pl) =>
@@ -1478,6 +1663,8 @@ function OperatorConsoleApp() {
           onQueueNext={(itemId) => setManualQueueIds((q) => [...q, itemId])}
           onAddFolderPicker={handleAddFolderPicker}
           onAddFiles={handleAddFiles}
+          onRefreshLibrary={handleRefreshLibrary}
+          isScanning={isScanning}
           onLoadSrtForCurrent={handleLoadSrtForCurrent}
           onToggleCountdownRun={() => setCountdownRunning((r) => !r)}
           onResetCountdown={(sec) => {

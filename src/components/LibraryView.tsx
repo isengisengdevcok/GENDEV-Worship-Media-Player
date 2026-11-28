@@ -57,6 +57,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [kindFilter, setKindFilter] = useState<'all' | 'video' | 'audio'>('all');
   const [selectedFolderId, setSelectedFolderId] = useState<string>('all');
   const [targetPlaylistId, setTargetPlaylistId] = useState<string>(activePlaylistId);
+  const effectiveTargetPlaylistId = useMemo(
+    () =>
+      playlists.some((p) => p.id === targetPlaylistId)
+        ? targetPlaylistId
+        : playlists[0]?.id || activePlaylistId,
+    [activePlaylistId, playlists, targetPlaylistId]
+  );
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -327,7 +334,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <div className="flex items-center gap-2">
             <label className="text-xs text-slate-400 whitespace-nowrap">Target Playlist:</label>
             <select
-              value={targetPlaylistId}
+              value={effectiveTargetPlaylistId}
               onChange={(e) => setTargetPlaylistId(e.target.value)}
               className="px-3 py-2 rounded-lg bg-[#0A0D14] border border-white/[0.09] text-xs text-slate-100 focus:outline-none focus:border-[#6366F1]"
             >
@@ -463,7 +470,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => onAddToPlaylist(targetPlaylistId, item.id)}
+                      onClick={() => onAddToPlaylist(effectiveTargetPlaylistId, item.id)}
                       title="Add to selected playlist"
                       className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-slate-200 text-xs font-medium whitespace-nowrap cursor-pointer"
                     >

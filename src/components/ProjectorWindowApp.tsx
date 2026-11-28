@@ -73,13 +73,34 @@ export const ProjectorWindowApp: React.FC = () => {
       setIsFullscreen(Boolean(document.fullscreenElement));
     };
 
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !document.fullscreenElement) {
+        channel.postMessage({ type: 'PROJECTOR_CLOSED' });
+        window.close();
+        // If browser blocks closing a non-scripted tab, navigate cleanly back to Operator Console
+        window.setTimeout(() => {
+          if (!window.closed) {
+            window.location.href = window.location.pathname;
+          }
+        }, 120);
+      }
+    };
+
+    const onBeforeUnload = () => {
+      channel.postMessage({ type: 'PROJECTOR_CLOSED' });
+    };
+
     window.addEventListener('storage', onStorage);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('beforeunload', onBeforeUnload);
     document.addEventListener('fullscreenchange', onFsChange);
 
     return () => {
       channel.postMessage({ type: 'PROJECTOR_CLOSED' });
       channel.close();
       window.removeEventListener('storage', onStorage);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('beforeunload', onBeforeUnload);
       document.removeEventListener('fullscreenchange', onFsChange);
     };
   }, []);
@@ -101,7 +122,7 @@ export const ProjectorWindowApp: React.FC = () => {
       className="relative w-screen h-screen bg-black overflow-hidden"
       style={{ cursor: isFullscreen ? 'none' : 'default' }}
       onDoubleClick={toggleFullscreen}
-      title="Double-click for Fullscreen"
+      title="Double-click for Fullscreen · Press ESC to return"
     >
       <ProjectorStage state={stageState} muted={true} />
     </div>

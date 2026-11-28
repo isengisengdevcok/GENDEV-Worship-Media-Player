@@ -53,6 +53,14 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [addMediaId, setAddMediaId] = useState<string>(allItems[0]?.id || '');
 
+  const effectiveAddMediaId = useMemo(
+    () =>
+      allItems.some((item) => item.id === addMediaId)
+        ? addMediaId
+        : allItems[0]?.id || '',
+    [addMediaId, allItems]
+  );
+
   const selectedPlaylist = useMemo(
     () => playlists.find((p) => p.id === selectedId) || playlists[0],
     [playlists, selectedId]
@@ -272,7 +280,7 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({
             {/* Quick Add Bar */}
             <div className="flex flex-wrap items-center gap-2 p-3 rounded-lg bg-[#0A0D14] border border-white/[0.07]">
               <select
-                value={addMediaId}
+                value={effectiveAddMediaId}
                 onChange={(e) => setAddMediaId(e.target.value)}
                 className="flex-1 min-w-[200px] px-3 py-2 rounded-lg bg-[#111622] border border-white/[0.09] text-xs text-slate-100 focus:outline-none focus:border-[#6366F1]"
               >
@@ -284,8 +292,10 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({
               </select>
               <button
                 type="button"
-                disabled={!addMediaId}
-                onClick={() => addMediaId && onAddItemToPlaylist(selectedPlaylist.id, addMediaId)}
+                disabled={!effectiveAddMediaId}
+                onClick={() =>
+                  effectiveAddMediaId && onAddItemToPlaylist(selectedPlaylist.id, effectiveAddMediaId)
+                }
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-white/[0.08] hover:bg-white/[0.14] text-white text-xs font-medium whitespace-nowrap cursor-pointer disabled:opacity-40"
               >
                 <Plus className="w-3.5 h-3.5" />
