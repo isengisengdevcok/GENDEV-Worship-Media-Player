@@ -1783,14 +1783,14 @@ function OperatorConsoleApp() {
       </div>
 
       {/* Top Bar Contract: Zone 1 (Wordmark) — Zone 2 (Clean Text Tabs) — Zone 3 (1 Primary Action) */}
-      <header className="h-14 shrink-0 px-5 border-b border-white/[0.08] bg-[#0D111B] flex items-center justify-between gap-8">
+      <header className="h-14 shrink-0 px-3 lg:px-5 border-b border-white/[0.08] bg-[#0D111B] flex items-center justify-between gap-3 lg:gap-6">
         {/* Zone 1: Single text element wordmark */}
-        <span className="font-display text-base font-bold tracking-tight text-white whitespace-nowrap shrink-0">
+        <span className="font-display text-sm lg:text-base font-bold tracking-tight text-white whitespace-nowrap shrink-0">
           GENDEV Worship Media Player
         </span>
 
         {/* Zone 2: 4 clean single-line navigation links */}
-        <nav className="flex items-center gap-6 text-xs font-medium">
+        <nav className="flex items-center gap-3 lg:gap-6 text-xs font-medium overflow-x-auto min-w-0">
           {(
             [
               { id: 'console', label: 'Operator Console' },
@@ -1820,7 +1820,7 @@ function OperatorConsoleApp() {
             <button
               type="button"
               onClick={handleExitProjector}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+              className="flex items-center gap-2 px-3 lg:px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
               <MonitorOff className="w-3.5 h-3.5" />
               <span>Exit Projector</span>
@@ -1829,7 +1829,7 @@ function OperatorConsoleApp() {
             <button
               type="button"
               onClick={handleOpenProjectorWindow}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#5E6AD2] hover:bg-[#4F5BC0] text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+              className="flex items-center gap-2 px-3 lg:px-4 py-2 rounded-lg bg-[#5E6AD2] hover:bg-[#4F5BC0] text-white text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
               <Monitor className="w-3.5 h-3.5" />
               <span>Send to Projector</span>

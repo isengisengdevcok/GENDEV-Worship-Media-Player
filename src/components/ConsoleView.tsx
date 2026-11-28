@@ -221,7 +221,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
 
   return (
     <div
-      className="flex-1 min-h-0 flex flex-col xl:flex-row gap-3.5 p-3.5 overflow-y-auto xl:overflow-hidden relative"
+      className="flex-1 min-h-0 flex flex-col lg:flex-row gap-3 p-3 overflow-y-auto lg:overflow-hidden relative"
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes('Files')) {
           e.preventDefault();
@@ -270,7 +270,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       />
 
       {/* COLUMN 1: Sidebar Media Library */}
-      <aside className="w-full xl:w-[280px] shrink-0 bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 flex flex-col gap-3 min-h-[260px] xl:min-h-0 overflow-hidden">
+      <aside className="w-full lg:w-[230px] xl:w-[268px] 2xl:w-[290px] shrink-0 bg-[#111622] border border-white/[0.08] rounded-xl p-3 flex flex-col gap-2.5 min-h-[240px] lg:min-h-0 overflow-hidden">
         <div className="flex items-center justify-between gap-2">
           <h2 className="font-display text-xs font-semibold uppercase tracking-wider text-slate-300">
             Media Library
@@ -438,13 +438,13 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
             </div>
           </div>
 
-          <div className="w-full aspect-video max-h-[275px] bg-black rounded-lg overflow-hidden border border-white/[0.08]">
+          <div className="w-full aspect-video max-h-[clamp(148px,28vh,275px)] bg-black rounded-lg overflow-hidden border border-white/[0.08]">
             <ProjectorStage state={projectorState} isPreview={true} muted={true} />
           </div>
         </section>
 
         {/* 2. OPERATOR SCREEN CONTROLS (Strictly Below & Outside Video — Never Shown on Dual Projector) */}
-        <section className="bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 space-y-3 shrink-0">
+        <section className="@container bg-[#111622] border border-white/[0.08] rounded-xl p-3 space-y-2.5 shrink-0">
           {playbackError && (
             <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
               <div className="flex items-center gap-2 min-w-0">
@@ -462,11 +462,11 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
             </div>
           )}
 
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-display text-[11px] font-semibold uppercase tracking-wider text-slate-400">
               Operator Screen Controls (Laptop Only)
             </span>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
                 disabled={!currentMedia}
@@ -609,7 +609,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               </button>
             </div>
 
-            <div className="flex items-center gap-2.5 min-w-[200px]">
+            <div className="flex items-center gap-2.5 flex-1 min-w-[160px] max-w-[260px]">
               <button
                 type="button"
                 onClick={onToggleMute}
@@ -651,13 +651,13 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-stretch">
+            <div className="grid grid-cols-1 @[420px]:grid-cols-2 @[580px]:grid-cols-12 gap-2 items-stretch">
               <button
                 type="button"
                 onClick={onSmartFadeOut}
                 disabled={!currentMedia}
                 title={`Smart Fade Out (${settings.shortcuts.fadeOut})`}
-                className="md:col-span-5 relative overflow-hidden min-h-[60px] px-4 py-3 rounded-lg bg-gradient-to-r from-[#5E6AD2] to-[#7C5CFC] hover:brightness-110 disabled:opacity-45 text-white font-display font-bold text-base flex items-center justify-between gap-2 cursor-pointer transition-all"
+                className="@[580px]:col-span-5 relative overflow-hidden min-h-[54px] px-3.5 py-2.5 rounded-lg bg-gradient-to-r from-[#5E6AD2] to-[#7C5CFC] hover:brightness-110 disabled:opacity-45 text-white font-display font-bold text-sm @[640px]:text-base flex items-center justify-between gap-2 cursor-pointer transition-all min-w-0"
               >
                 {fadeProgress.active && fadeProgress.direction === 'out' && (
                   <div
@@ -665,11 +665,11 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                     style={{ width: `${Math.round(fadeProgress.progress * 100)}%` }}
                   />
                 )}
-                <span className="relative flex items-center gap-2.5">
-                  <Sunset className="w-5 h-5" />
-                  <span>FADE OUT</span>
+                <span className="relative flex items-center gap-2 min-w-0">
+                  <Sunset className="w-4 h-4 shrink-0" />
+                  <span className="truncate">FADE OUT</span>
                 </span>
-                <span className="relative font-mono-tabular text-xs bg-black/25 px-2 py-0.5 rounded">
+                <span className="relative font-mono-tabular text-[11px] bg-black/25 px-2 py-0.5 rounded shrink-0">
                   {fadeProgress.active && fadeProgress.direction === 'out'
                     ? `${Math.round(fadeProgress.currentVolPct)}%`
                     : `${settings.fade.fadeOutDurationSec}s -> ${settings.fade.postFadeAction.toUpperCase()}`}
@@ -681,7 +681,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                 onClick={onSmartFadeIn}
                 disabled={!currentMedia}
                 title={`Smart Fade In (${settings.shortcuts.fadeIn})`}
-                className="md:col-span-3 relative overflow-hidden min-h-[60px] px-3.5 py-2.5 rounded-lg bg-[#1A2236] hover:bg-[#232D47] border border-indigo-400/35 disabled:opacity-45 text-indigo-100 font-display font-semibold text-sm flex items-center justify-between gap-2 cursor-pointer"
+                className="@[580px]:col-span-3 relative overflow-hidden min-h-[54px] px-3 py-2.5 rounded-lg bg-[#1A2236] hover:bg-[#232D47] border border-indigo-400/35 disabled:opacity-45 text-indigo-100 font-display font-semibold text-xs @[640px]:text-sm flex items-center justify-between gap-2 cursor-pointer min-w-0"
               >
                 {fadeProgress.active && fadeProgress.direction === 'in' && (
                   <div
@@ -689,18 +689,18 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                     style={{ width: `${Math.round(fadeProgress.progress * 100)}%` }}
                   />
                 )}
-                <span className="relative flex items-center gap-1.5">
-                  <Sunrise className="w-4 h-4 text-indigo-300" />
-                  <span>FADE IN</span>
+                <span className="relative flex items-center gap-1.5 min-w-0">
+                  <Sunrise className="w-4 h-4 text-indigo-300 shrink-0" />
+                  <span className="truncate">FADE IN</span>
                 </span>
-                <span className="relative font-mono-tabular text-xs text-indigo-300">
+                <span className="relative font-mono-tabular text-xs text-indigo-300 shrink-0">
                   {settings.fade.fadeInDurationSec}s
                 </span>
               </button>
 
-              <div className="md:col-span-4 grid grid-cols-2 gap-2">
-                <div className="px-2.5 py-1.5 rounded-lg bg-[#0A0D14] border border-white/[0.07] flex flex-col justify-center">
-                  <span className="text-[10px] text-slate-400">Fade Out Time</span>
+              <div className="@[420px]:col-span-2 @[580px]:col-span-4 grid grid-cols-2 gap-2">
+                <div className="px-2.5 py-1.5 rounded-lg bg-[#0A0D14] border border-white/[0.07] flex flex-col justify-center min-w-0">
+                  <span className="text-[10px] text-slate-400 truncate">Fade Out Time</span>
                   <select
                     value={settings.fade.fadeOutDurationSec}
                     onChange={(e) =>
@@ -712,7 +712,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                         },
                       }))
                     }
-                    className="bg-transparent text-xs font-mono-tabular text-white focus:outline-none cursor-pointer"
+                    className="bg-transparent text-xs font-mono-tabular text-white focus:outline-none cursor-pointer w-full"
                   >
                     {[1, 2, 3, 5, 10, 15].map((s) => (
                       <option key={s} value={s} className="bg-[#111622]">
@@ -722,8 +722,8 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                   </select>
                 </div>
 
-                <div className="px-2.5 py-1.5 rounded-lg bg-[#0A0D14] border border-white/[0.07] flex flex-col justify-center">
-                  <span className="text-[10px] text-slate-400">Auto-Fade End</span>
+                <div className="px-2.5 py-1.5 rounded-lg bg-[#0A0D14] border border-white/[0.07] flex flex-col justify-center min-w-0">
+                  <span className="text-[10px] text-slate-400 truncate">Auto-Fade End</span>
                   <select
                     value={settings.fade.autoFadeAtEndEnabled ? settings.fade.autoFadeAtEndSec : 0}
                     onChange={(e) => {
@@ -741,7 +741,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                         },
                       }));
                     }}
-                    className="bg-transparent text-xs font-mono-tabular text-white focus:outline-none cursor-pointer"
+                    className="bg-transparent text-xs font-mono-tabular text-white focus:outline-none cursor-pointer w-full"
                   >
                     <option value={0} className="bg-[#111622]">
                       Off
@@ -758,52 +758,52 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
           </div>
 
           {/* Dual Display Projector, Black Screen, Freeze Frame */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-2 @[560px]:grid-cols-4 gap-2">
             <button
               type="button"
               onClick={onToggleBlackScreen}
               title={`Black Screen (${settings.shortcuts.blackScreen})`}
-              className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-display font-semibold flex items-center justify-center gap-2 border cursor-pointer transition-colors whitespace-nowrap ${
+              className={`min-h-[42px] px-2.5 py-2 rounded-lg text-xs font-display font-semibold flex items-center justify-center gap-1.5 border cursor-pointer transition-colors min-w-0 ${
                 blackScreen
                   ? 'bg-rose-600 text-white border-rose-400'
                   : 'bg-[#0A0D14] hover:bg-white/[0.06] text-slate-200 border-white/[0.09]'
               }`}
             >
               <MonitorOff className="w-4 h-4 shrink-0" />
-              <span>{blackScreen ? 'EXIT BLACK' : 'BLACK SCREEN'}</span>
+              <span className="truncate">{blackScreen ? 'EXIT BLACK' : 'BLACK SCREEN'}</span>
             </button>
 
             <button
               type="button"
               onClick={onToggleFreezeFrame}
               title={`Freeze Frame (${settings.shortcuts.freezeFrame})`}
-              className={`min-h-[44px] px-3 py-2 rounded-lg text-xs font-display font-semibold flex items-center justify-center gap-2 border cursor-pointer transition-colors whitespace-nowrap ${
+              className={`min-h-[42px] px-2.5 py-2 rounded-lg text-xs font-display font-semibold flex items-center justify-center gap-1.5 border cursor-pointer transition-colors min-w-0 ${
                 freezeFrame
                   ? 'bg-sky-600 text-white border-sky-400'
                   : 'bg-[#0A0D14] hover:bg-white/[0.06] text-slate-200 border-white/[0.09]'
               }`}
             >
               <Snowflake className="w-4 h-4 shrink-0" />
-              <span>{freezeFrame ? 'UNFREEZE' : 'FREEZE FRAME'}</span>
+              <span className="truncate">{freezeFrame ? 'UNFREEZE' : 'FREEZE FRAME'}</span>
             </button>
 
             {projectorWindowOpen ? (
               <button
                 type="button"
                 onClick={onExitProjector}
-                className="sm:col-span-2 min-h-[44px] px-3 py-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 text-xs font-display font-semibold flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
+                className="col-span-2 min-h-[42px] px-3 py-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 text-xs font-display font-semibold flex items-center justify-center gap-2 cursor-pointer min-w-0"
               >
                 <Monitor className="w-4 h-4 shrink-0" />
-                <span>EXIT PROJECTOR (MONITOR 2 LIVE)</span>
+                <span className="truncate">EXIT PROJECTOR (MONITOR 2 LIVE)</span>
               </button>
             ) : (
               <button
                 type="button"
                 onClick={onOpenProjectorWindow}
-                className="sm:col-span-2 min-h-[44px] px-3 py-2 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-display font-semibold flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
+                className="col-span-2 min-h-[42px] px-3 py-2 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-display font-semibold flex items-center justify-center gap-2 cursor-pointer min-w-0"
               >
                 <ExternalLink className="w-4 h-4 shrink-0" />
-                <span>SEND TO PROJECTOR (MONITOR 2)</span>
+                <span className="truncate">SEND TO PROJECTOR (MONITOR 2)</span>
               </button>
             )}
           </div>
@@ -866,7 +866,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       </main>
 
       {/* COLUMN 3: Digital Clock, Countdown & Drag-and-Drop Service Playlist Schedule */}
-      <aside className="w-full xl:w-[335px] shrink-0 flex flex-col gap-3 min-h-[340px] xl:min-h-0 overflow-hidden">
+      <aside className="w-full lg:w-[265px] xl:w-[310px] 2xl:w-[340px] shrink-0 flex flex-col gap-3 min-h-[320px] lg:min-h-0 overflow-hidden">
         {/* Digital Clock & Countdown Card */}
         <section className="bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 space-y-2.5 shrink-0">
           <div className="flex items-center justify-between">

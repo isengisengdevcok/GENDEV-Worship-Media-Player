@@ -58,9 +58,12 @@ jobs:
       - name: 6. Install Dependencies & Verify Frontend
         shell: pwsh
         run: |
-          npm install
+          npm install --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
           npm run lint
+          if ($LASTEXITCODE -ne 0) { throw "TypeScript lint failed" }
           npm run build
+          if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
 
       - name: 7. Build Lightweight Tauri v2 Portable & Setup EXEs
         shell: pwsh

@@ -491,6 +491,32 @@ fn ensure_portable_dirs(app: &AppHandle) {
     }
 }
 
+fn adapt_main_window_to_monitor(win: &tauri::WebviewWindow) {
+    let monitor = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten());
+
+    if let Some(m) = monitor {
+        let scale = m.scale_factor().max(1.0);
+        let sz = m.size();
+        let logical_w = (sz.width as f64) / scale;
+        let logical_h = (sz.height as f64) / scale;
+
+        // Auto-maximize on 1366x768 or 125%/150%-scaled laptops so every control fits without clipping
+        if logical_w <= 1380.0 || logical_h <= 790.0 {
+            let _ = win.maximize();
+            return;
+        }
+
+        let target_w = 1380.0_f64.min((logical_w - 48.0).max(880.0));
+        let target_h = 860.0_f64.min((logical_h - 64.0).max(560.0));
+        let _ = win.set_size(Size::Logical(tauri::LogicalSize::new(target_w, target_h)));
+        let _ = win.center();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -498,6 +524,7 @@ pub fn run() {
         .setup(|app| {
             ensure_portable_dirs(app.handle());
             if let Some(main_win) = app.get_webview_window("main") {
+                adapt_main_window_to_monitor(&main_win);
                 let app_handle = app.handle().clone();
                 main_win.on_window_event(move |event| match event {
                     WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
