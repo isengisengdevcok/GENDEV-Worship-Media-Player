@@ -33,7 +33,7 @@ class DualVlcEngine(QObject):
     Production LibVLC playback engine supporting:
     - Main video/audio player routed to Projector HWND or Operator Preview HWND
     - Separate Background Music player
-    - Smooth sample-stepped Fade Out / Fade In / Auto-Fade at End / Crossfade
+    - Smart Fade Out / Fade In & Auto-Fade at End with safe audio restoration on replay
     - Snapshot Freeze Frame capture
     """
 
@@ -51,10 +51,14 @@ class DualVlcEngine(QObject):
 
         self._master_volume = 90
         self._bgm_volume = 38
+        self._current_file_path: str | None = None
         self._fade_curve: FadeCurve | None = None
         self._fade_direction = "out"
         self._fade_elapsed = 0.0
         self._post_fade_action = "pause"
+        self._auto_fade_enabled = True
+        self._auto_fade_sec = 5.0
+        self._auto_fade_triggered = False
 
         self._fade_timer = QTimer(self)
         self._fade_timer.setInterval(40)
@@ -64,6 +68,10 @@ class DualVlcEngine(QObject):
         self._poll_timer.setInterval(200)
         self._poll_timer.timeout.connect(self._on_poll_playback)
         self._poll_timer.start()
+
+    def configure_auto_fade(self, enabled: bool, seconds: float) -> None:
+        self._auto_fade_enabled = enabled
+        self._auto_fade_sec = max(1.0, seconds)
 
     def bind_video_window(self, hwnd: int) -> None:
         if not self.player:
@@ -79,6 +87,9 @@ class DualVlcEngine(QObject):
         if not self.instance or not self.player:
             return
         self._fade_timer.stop()
+        self._auto_fade_triggered = False
+        self._current_file_path = file_path
+
         media = self.instance.media_new(file_path)
         self.player.set_media(media)
         self.player.audio_set_volume(self._master_volume)
@@ -89,23 +100,45 @@ class DualVlcEngine(QObject):
     def toggle_play_pause(self) -> bool:
         if not self.player:
             return False
+
+        state = self.player.get_state() if vlc else None
+        if vlc and state in (vlc.State.Ended, vlc.State.Stopped):
+            # Replaying from end/stop: always reset auto-fade flag and restore master volume
+            self._fade_timer.stop()
+            self._auto_fade_triggered = False
+            if self._current_file_path and self.instance:
+                self.player.set_media(self.instance.media_new(self._current_file_path))
+            self.player.audio_set_volume(self._master_volume)
+            self.player.play()
+            return True
+
         if self.player.is_playing():
             self.player.pause()
             return False
+
+        # Resuming from pause: if volume was faded to 0, restore master volume cleanly
+        self._fade_timer.stop()
+        if self.player.audio_get_volume() <= 2:
+            self._auto_fade_triggered = False
+            self.player.audio_set_volume(self._master_volume)
         self.player.play()
         return True
 
     def stop(self) -> None:
         self._fade_timer.stop()
+        self._auto_fade_triggered = False
         if self.player:
             self.player.stop()
+            self.player.audio_set_volume(self._master_volume)
 
     def set_volume(self, vol: int) -> None:
         self._master_volume = max(0, min(100, vol))
         if self.player:
             self.player.audio_set_volume(self._master_volume)
 
-    def start_fade_out(self, duration_sec: float = 5.0, end_vol: int = 0, post_action: str = "pause") -> None:
+    def start_fade_out(
+        self, duration_sec: float = 5.0, end_vol: int = 0, post_action: str = "pause"
+    ) -> None:
         if not self.player:
             return
         current = self.player.audio_get_volume()
@@ -120,6 +153,10 @@ class DualVlcEngine(QObject):
     def start_fade_in(self, duration_sec: float = 3.0, start_vol: int = 0) -> None:
         if not self.player:
             return
+        self._auto_fade_triggered = False
+        state = self.player.get_state() if vlc else None
+        if vlc and state in (vlc.State.Ended, vlc.State.Stopped) and self._current_file_path and self.instance:
+            self.player.set_media(self.instance.media_new(self._current_file_path))
         if not self.player.is_playing():
             self.player.play()
         self.player.audio_set_volume(start_vol)
@@ -151,6 +188,7 @@ class DualVlcEngine(QObject):
             if self._fade_direction == "out" and vol <= 0:
                 if self._post_fade_action == "stop":
                     self.player.stop()
+                    self.player.audio_set_volume(self._master_volume)
                 else:
                     self.player.set_pause(1)
             self.fade_finished.emit(self._fade_direction)
@@ -162,5 +200,23 @@ class DualVlcEngine(QObject):
         total = self.player.get_length()
         if cur >= 0 and total > 0:
             self.position_changed.emit(cur, total)
+            remain_sec = (total - cur) / 1000.0
+            if (
+                self._auto_fade_enabled
+                and not self._auto_fade_triggered
+                and self.player.is_playing()
+                and total > (self._auto_fade_sec + 1.0) * 1000
+                and 0 < remain_sec <= self._auto_fade_sec
+            ):
+                self._auto_fade_triggered = True
+                self.start_fade_out(
+                    duration_sec=max(0.2, remain_sec),
+                    end_vol=0,
+                    post_action="pause",
+                )
+
         if vlc and self.player.get_state() == vlc.State.Ended:
+            self._fade_timer.stop()
+            self._auto_fade_triggered = False
+            self.player.audio_set_volume(self._master_volume)
             self.media_ended.emit()

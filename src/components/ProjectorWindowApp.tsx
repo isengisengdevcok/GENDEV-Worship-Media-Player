@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { Maximize2 } from 'lucide-react';
 import { DEFAULT_SETTINGS } from '../services/storage';
 import { ProjectorSyncState } from '../types/media';
 import { ProjectorStage } from './ProjectorStage';
@@ -29,6 +28,11 @@ const INITIAL_PROJECTOR_STATE: ProjectorSyncState = {
   updatedAt: Date.now(),
 };
 
+/**
+ * Pure zero-UI Dual Display Projector Output (Monitor 2).
+ * Never renders operator controls, playlists, or floating buttons over the video.
+ * Double-click anywhere on the stage to toggle OS fullscreen.
+ */
 export const ProjectorWindowApp: React.FC = () => {
   const [stageState, setStageState] = useState<ProjectorSyncState>(() => {
     try {
@@ -53,7 +57,6 @@ export const ProjectorWindowApp: React.FC = () => {
       }
     };
 
-    // Request immediate state sync from Operator Console
     channel.postMessage({ type: 'PROJECTOR_READY' });
 
     const onStorage = (e: StorageEvent) => {
@@ -81,32 +84,26 @@ export const ProjectorWindowApp: React.FC = () => {
     };
   }, []);
 
-  const enterFullscreen = async () => {
+  const toggleFullscreen = async () => {
     try {
-      await document.documentElement.requestFullscreen();
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await document.documentElement.requestFullscreen();
+      }
     } catch {
-      // ignore if user agent restricts
+      // ignore if user agent restricts without gesture
     }
   };
 
   return (
     <div
-      className="relative w-screen h-screen bg-black overflow-hidden cursor-none"
-      style={{ cursor: isFullscreen ? 'none' : 'pointer' }}
-      onDoubleClick={enterFullscreen}
+      className="relative w-screen h-screen bg-black overflow-hidden"
+      style={{ cursor: isFullscreen ? 'none' : 'default' }}
+      onDoubleClick={toggleFullscreen}
+      title="Double-click for Fullscreen"
     >
       <ProjectorStage state={stageState} muted={true} />
-
-      {!isFullscreen && (
-        <button
-          type="button"
-          onClick={enterFullscreen}
-          className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-5 py-2.5 rounded-lg bg-[#161C2C]/90 hover:bg-[#5E6AD2] text-white text-sm font-medium border border-white/15 shadow-2xl transition-colors cursor-pointer"
-        >
-          <Maximize2 className="w-4 h-4" />
-          <span>Click or Double-Click for Fullscreen Projector (Monitor 2)</span>
-        </button>
-      )}
     </div>
   );
 };

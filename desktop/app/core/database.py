@@ -233,5 +233,18 @@ class WorshipDatabase:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def replace_playlist_order(self, playlist_id: int, media_ids: list[int]) -> None:
+        self.conn.execute("DELETE FROM playlist_items WHERE playlist_id = ?", (playlist_id,))
+        for pos, media_id in enumerate(media_ids):
+            self.conn.execute(
+                "INSERT INTO playlist_items (playlist_id, media_id, position) VALUES (?, ?, ?)",
+                (playlist_id, media_id, pos),
+            )
+        self.conn.execute(
+            "UPDATE playlists SET updated_at = ? WHERE id = ?",
+            (time.time(), playlist_id),
+        )
+        self.conn.commit()
+
     def close(self) -> None:
         self.conn.close()

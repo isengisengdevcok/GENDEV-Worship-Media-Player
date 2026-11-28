@@ -455,13 +455,12 @@ function OperatorConsoleApp() {
     settings.bgm.volume,
   ]);
 
-  // Core Play Media Handler (supports true A/B Crossfade)
+  // Core Play Media Handler (supports true A/B Crossfade and safe replay after fade-out)
   const playMediaItem = useCallback(
     (item: MediaItem, playlistIndex?: number) => {
       if (item.missing || !item.url) return;
 
       audioEngine.ensureContext();
-      audioEngine.cancelMainFade();
       autoFadeTriggeredRef.current = false;
       setFadeProgress({ active: false, direction: 'out', progress: 0, currentVolPct: 100 });
       setFreezeFrame(false);
@@ -488,6 +487,9 @@ function OperatorConsoleApp() {
       const targetEl = getDeckEl(targetDeck);
       if (!targetEl) return;
 
+      // Cancel any stale fade automation on target deck before starting playback
+      audioEngine.cancelMainFade(targetEl);
+
       if (shouldCrossfade && oldEl) {
         audioEngine.rampElementGain(
           oldEl,
@@ -498,11 +500,14 @@ function OperatorConsoleApp() {
             onComplete: () => {
               oldEl.pause();
               oldEl.currentTime = 0;
+              audioEngine.setElementGainImmediate(oldEl, 1);
             },
           }
         );
       } else if (oldEl && oldEl !== targetEl) {
+        audioEngine.cancelMainFade(oldEl);
         oldEl.pause();
+        audioEngine.setElementGainImmediate(oldEl, 1);
       }
 
       setActiveDeck(targetDeck);
@@ -515,7 +520,6 @@ function OperatorConsoleApp() {
         !item.url.endsWith('.jpg') && !item.url.endsWith('.png');
 
       if (!isPlayableStream) {
-        // Still-image fallback while WebM generates or for image slides
         if (oldEl && !shouldCrossfade) oldEl.pause();
         setIsPlaying(true);
         return;
@@ -530,6 +534,10 @@ function OperatorConsoleApp() {
       targetEl.loop = item.sourceType === 'builtin' && item.kind === 'video';
 
       audioEngine.attachElement(targetEl, shouldCrossfade ? 0 : 1);
+      if (!shouldCrossfade) {
+        deckGainRef.current = 1;
+        audioEngine.setElementGainImmediate(targetEl, 1);
+      }
 
       void targetEl
         .play()
@@ -561,10 +569,10 @@ function OperatorConsoleApp() {
 
   // Stop Playback
   const handleStop = useCallback(() => {
-    audioEngine.cancelMainFade();
     setFadeProgress({ active: false, direction: 'out', progress: 0, currentVolPct: 100 });
     [deckARef.current, deckBRef.current].forEach((el) => {
       if (el) {
+        audioEngine.cancelMainFade(el);
         el.pause();
         el.currentTime = 0;
         audioEngine.setElementGainImmediate(el, 1);
@@ -579,7 +587,7 @@ function OperatorConsoleApp() {
     restoreBgmAfterVideo();
   }, [restoreBgmAfterVideo]);
 
-  // Toggle Play / Pause
+  // Toggle Play / Pause (safely restores audio if video previously ended or faded out)
   const handleTogglePlayPause = useCallback(() => {
     audioEngine.ensureContext();
     if (!currentMedia) {
@@ -611,7 +619,27 @@ function OperatorConsoleApp() {
         el.setAttribute('data-src', currentMedia.url);
         el.src = currentMedia.url;
       }
-      audioEngine.attachElement(el, deckGainRef.current);
+
+      const elDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : duration;
+      const reachedEnd = el.ended || (elDuration > 0 && el.currentTime >= elDuration - 0.35);
+      if (reachedEnd) {
+        el.currentTime = 0;
+        setCurrentTime(0);
+        autoFadeTriggeredRef.current = false;
+      }
+
+      // Restore full audio gain if previously faded to 0 via Fade Out or Auto-Fade at End
+      if (deckGainRef.current <= 0.05 || reachedEnd) {
+        audioEngine.cancelMainFade(el);
+        deckGainRef.current = 1;
+        audioEngine.attachElement(el, 1);
+        audioEngine.setElementGainImmediate(el, 1);
+        autoFadeTriggeredRef.current = false;
+        setFadeProgress({ active: false, direction: 'out', progress: 0, currentVolPct: 100 });
+      } else {
+        audioEngine.attachElement(el, deckGainRef.current);
+      }
+
       void el
         .play()
         .then(() => setIsPlaying(true))
@@ -621,6 +649,7 @@ function OperatorConsoleApp() {
     activePlaylist?.itemIds,
     currentMedia,
     duckBgmForVideo,
+    duration,
     getDeckEl,
     isPlaying,
     mediaItems,
@@ -870,7 +899,7 @@ function OperatorConsoleApp() {
         dur - t <= settings.fade.autoFadeAtEndSec
       ) {
         autoFadeTriggeredRef.current = true;
-        const remain = Math.max(0.5, dur - t);
+        const remain = Math.max(0.1, dur - t);
         audioEngine.rampElementGain(el, deckGainRef.current, 0, remain, {
           onTick: (g, p) => {
             deckGainRef.current = g;
@@ -893,9 +922,13 @@ function OperatorConsoleApp() {
   const handleDeckEnded = useCallback(
     (which: 'A' | 'B') => {
       if (which !== activeDeck) return;
+      const el = getDeckEl(which);
+      // Cancel any lingering auto-fade automation BEFORE restoring gain to 1
+      audioEngine.cancelMainFade(el);
       autoFadeTriggeredRef.current = false;
       deckGainRef.current = 1;
-      audioEngine.setElementGainImmediate(getDeckEl(which), 1);
+      audioEngine.setElementGainImmediate(el, 1);
+      setFadeProgress({ active: false, direction: 'out', progress: 0, currentVolPct: 100 });
 
       if (repeatMode === 'one' && currentMedia) {
         playMediaItem(currentMedia, activeIndex);
@@ -906,6 +939,10 @@ function OperatorConsoleApp() {
       if (manualQueueIds.length > 0 || activeIndex + 1 < list.length || repeatMode === 'all') {
         handleNext();
       } else {
+        if (el) {
+          el.currentTime = 0;
+        }
+        setCurrentTime(0);
         setIsPlaying(false);
         restoreBgmAfterVideo();
       }
@@ -1372,6 +1409,23 @@ function OperatorConsoleApp() {
             setActivePlaylistId(id);
             setActiveIndex(0);
           }}
+          onReorderActivePlaylist={(fromIndex, toIndex) => {
+            setPlaylists((prev) =>
+              prev.map((pl) => {
+                if (pl.id !== activePlaylist.id) return pl;
+                const copy = [...pl.itemIds];
+                const [moved] = copy.splice(fromIndex, 1);
+                copy.splice(toIndex, 0, moved);
+                return { ...pl, itemIds: copy, updatedAt: Date.now() };
+              })
+            );
+            setActiveIndex((curr) => {
+              if (curr === fromIndex) return toIndex;
+              if (fromIndex < curr && toIndex >= curr) return curr - 1;
+              if (fromIndex > curr && toIndex <= curr) return curr + 1;
+              return curr;
+            });
+          }}
           onPlayMedia={playMediaItem}
           onTogglePlayPause={handleTogglePlayPause}
           onStop={handleStop}
@@ -1382,6 +1436,14 @@ function OperatorConsoleApp() {
             if (el && Number.isFinite(sec)) {
               el.currentTime = sec;
               setCurrentTime(sec);
+              const elDur = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : duration;
+              if (!settings.fade.autoFadeAtEndEnabled || elDur - sec > settings.fade.autoFadeAtEndSec + 0.5) {
+                audioEngine.cancelMainFade(el);
+                autoFadeTriggeredRef.current = false;
+                deckGainRef.current = 1;
+                audioEngine.setElementGainImmediate(el, 1);
+                setFadeProgress({ active: false, direction: 'out', progress: 0, currentVolPct: 100 });
+              }
             }
           }}
           onChangePlaybackRate={(rate) => {

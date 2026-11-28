@@ -21,7 +21,9 @@ class GendevAudioEngine {
 
   public ensureContext(): AudioContext {
     if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtx();
       this.limiter = this.ctx.createDynamicsCompressor();
       this.limiter.threshold.value = -3;
@@ -75,9 +77,8 @@ class GendevAudioEngine {
       const now = this.ctx.currentTime;
       ch.gain.gain.cancelScheduledValues(now);
       ch.gain.gain.setValueAtTime(clamped, now);
-    } else {
-      el.volume = clamped;
     }
+    el.volume = ch ? 1 : clamped;
   }
 
   public setMasterGain(volume01: number, muted: boolean): void {
@@ -151,10 +152,21 @@ class GendevAudioEngine {
     else this.activeFadeTimer = raf;
   }
 
-  public cancelMainFade(): void {
+  /**
+   * Cancels BOTH the RAF ticker and any scheduled Web Audio AudioParam ramps
+   * so restarting or seeking a video never inherits a stale fade-out to 0.
+   */
+  public cancelMainFade(el?: HTMLMediaElement | null): void {
     if (this.activeFadeTimer !== null) {
       cancelAnimationFrame(this.activeFadeTimer);
       this.activeFadeTimer = null;
+    }
+    if (el && this.ctx) {
+      const ch = this.channels.get(el);
+      if (ch) {
+        const now = this.ctx.currentTime;
+        ch.gain.gain.cancelScheduledValues(now);
+      }
     }
   }
 

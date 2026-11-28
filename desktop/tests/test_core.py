@@ -61,6 +61,21 @@ class TestGendevCore(unittest.TestCase):
             relocated.write_bytes(b"mock-video-header")
             db.relocate_missing_media(media_id, str(relocated))
             self.assertEqual(db.verify_all_media_existence(), 0)
+
+            # Test drag-and-drop playlist reorder persistence
+            second_file = tmp_path / "closing_song.mp4"
+            second_file.write_bytes(b"mock-video-2")
+            media_id_2 = db.upsert_media(
+                file_path=str(second_file),
+                name="closing_song",
+                kind="video",
+                ext="MP4",
+                size_bytes=second_file.stat().st_size,
+            )
+            db.add_to_playlist(ibadah_id, media_id_2)
+            db.replace_playlist_order(ibadah_id, [media_id_2, media_id])
+            reordered = db.get_playlist_items(ibadah_id)
+            self.assertEqual([r["id"] for r in reordered], [media_id_2, media_id])
             db.close()
 
     def test_fade_curve_progression(self) -> None:

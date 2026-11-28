@@ -1,6 +1,8 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Captions,
   Clock,
   ExternalLink,
@@ -8,6 +10,7 @@ import {
   FilePlus,
   FileVideo,
   FolderPlus,
+  GripVertical,
   ListPlus,
   Maximize,
   Monitor,
@@ -70,6 +73,7 @@ interface ConsoleViewProps {
   bgmVolume: number;
   settings: AppSettings;
   onSelectPlaylist: (playlistId: string) => void;
+  onReorderActivePlaylist: (fromIndex: number, toIndex: number) => void;
   onPlayMedia: (item: MediaItem, playlistIndex?: number) => void;
   onTogglePlayPause: () => void;
   onStop: () => void;
@@ -132,6 +136,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
   bgmVolume,
   settings,
   onSelectPlaylist,
+  onReorderActivePlaylist,
   onPlayMedia,
   onTogglePlayPause,
   onStop,
@@ -165,7 +170,9 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
 }) => {
   const [libSearch, setLibSearch] = useState('');
   const [libKind, setLibKind] = useState<'all' | 'video' | 'audio'>('all');
-  const [isDragging, setIsDragging] = useState(false);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [dragPlaylistIndex, setDragPlaylistIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const srtInputRef = useRef<HTMLInputElement | null>(null);
@@ -193,19 +200,21 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
     <div
       className="flex-1 min-h-0 flex flex-col xl:flex-row gap-3.5 p-3.5 overflow-y-auto xl:overflow-hidden relative"
       onDragOver={(e) => {
-        e.preventDefault();
-        setIsDragging(true);
+        if (e.dataTransfer.types.includes('Files')) {
+          e.preventDefault();
+          setIsDraggingFiles(true);
+        }
       }}
-      onDragLeave={() => setIsDragging(false)}
+      onDragLeave={() => setIsDraggingFiles(false)}
       onDrop={(e) => {
-        e.preventDefault();
-        setIsDragging(false);
         if (e.dataTransfer.files?.length) {
+          e.preventDefault();
+          setIsDraggingFiles(false);
           onAddFiles(e.dataTransfer.files);
         }
       }}
     >
-      {isDragging && (
+      {isDraggingFiles && (
         <div className="absolute inset-3 z-40 bg-[#0A0D14]/92 border-2 border-dashed border-[#6366F1] rounded-xl flex flex-col items-center justify-center gap-2 pointer-events-none">
           <Upload className="w-9 h-9 text-indigo-400" />
           <p className="font-display text-base font-semibold text-white">
@@ -238,7 +247,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       />
 
       {/* COLUMN 1: Sidebar Media Library */}
-      <aside className="w-full xl:w-[285px] shrink-0 bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 flex flex-col gap-3 min-h-[280px] xl:min-h-0 overflow-hidden">
+      <aside className="w-full xl:w-[280px] shrink-0 bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 flex flex-col gap-3 min-h-[260px] xl:min-h-0 overflow-hidden">
         <div className="flex items-center justify-between gap-2">
           <h2 className="font-display text-xs font-semibold uppercase tracking-wider text-slate-300">
             Media Library
@@ -346,10 +355,10 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         </div>
       </aside>
 
-      {/* COLUMN 2: Center Dominant Stage Preview & Tactile Operator Deck */}
-      <main className="flex-1 min-w-0 flex flex-col gap-3 overflow-y-auto xl:overflow-hidden">
-        {/* Stage Preview Viewport */}
-        <section className="bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 flex flex-col gap-2.5 shrink-0">
+      {/* COLUMN 2: Pure Video Preview on Top + Operator Screen Controls Strictly Below Video */}
+      <main className="flex-1 min-w-0 flex flex-col gap-3 overflow-y-auto pr-0.5">
+        {/* 1. VIDEO PREVIEW ONLY (Zero controls inside video viewport) */}
+        <section className="bg-[#111622] border border-white/[0.08] rounded-xl p-3 flex flex-col gap-2 shrink-0">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
@@ -359,17 +368,19 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                 {blackScreen && (
                   <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-400 shrink-0">
                     <MonitorOff className="w-3.5 h-3.5" />
-                    <span>BLACK SCREEN ACTIVE</span>
+                    <span>BLACK SCREEN</span>
                   </span>
                 )}
                 {freezeFrame && (
                   <span className="inline-flex items-center gap-1 text-xs font-semibold text-sky-400 shrink-0">
                     <Snowflake className="w-3.5 h-3.5" />
-                    <span>FROZEN ON PROJECTOR</span>
+                    <span>FROZEN</span>
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                <span>Operator Video Preview</span>
+                <span aria-hidden="true">·</span>
                 <span>{currentMedia ? currentMedia.format : 'READY'}</span>
                 {currentMedia?.resolution && (
                   <>
@@ -389,14 +400,26 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                 )}
               </div>
             </div>
+          </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
+          <div className="w-full aspect-video max-h-[275px] bg-black rounded-lg overflow-hidden border border-white/[0.08]">
+            <ProjectorStage state={projectorState} isPreview={true} muted={true} />
+          </div>
+        </section>
+
+        {/* 2. OPERATOR SCREEN CONTROLS (Strictly Below & Outside Video — Never Shown on Dual Projector) */}
+        <section className="bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 space-y-3 shrink-0">
+          <div className="flex items-center justify-between">
+            <span className="font-display text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              Operator Screen Controls (Laptop Only)
+            </span>
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 disabled={!currentMedia}
                 onClick={() => srtInputRef.current?.click()}
                 title="Load External .SRT / .VTT Subtitle"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-slate-200 text-xs font-medium disabled:opacity-40 cursor-pointer whitespace-nowrap"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/[0.05] hover:bg-white/[0.1] text-slate-200 text-xs font-medium disabled:opacity-40 cursor-pointer whitespace-nowrap"
               >
                 <Captions className="w-3.5 h-3.5" />
                 <span>SRT</span>
@@ -406,7 +429,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                 value={playbackRate}
                 onChange={(e) => onChangePlaybackRate(Number(e.target.value))}
                 title="Playback Speed"
-                className="px-2 py-1.5 rounded-lg bg-[#0A0D14] border border-white/[0.08] font-mono-tabular text-xs text-slate-200 cursor-pointer"
+                className="px-2 py-1 rounded-md bg-[#0A0D14] border border-white/[0.08] font-mono-tabular text-xs text-slate-200 cursor-pointer"
               >
                 {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
                   <option key={r} value={r}>
@@ -418,8 +441,8 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               <button
                 type="button"
                 onClick={onEnterSingleScreenFullscreen}
-                title="Fullscreen Projector Stage on Current Display"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.1] text-slate-200 text-xs font-medium cursor-pointer whitespace-nowrap"
+                title="Preview Fullscreen on Current Display"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/[0.05] hover:bg-white/[0.1] text-slate-200 text-xs font-medium cursor-pointer whitespace-nowrap"
               >
                 <Maximize className="w-3.5 h-3.5" />
                 <span>Fullscreen Stage</span>
@@ -427,13 +450,8 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
             </div>
           </div>
 
-          {/* 16:9 Live Preview Canvas */}
-          <div className="w-full aspect-video max-h-[300px] xl:max-h-[325px] bg-black rounded-lg overflow-hidden border border-white/[0.08] relative">
-            <ProjectorStage state={projectorState} isPreview={true} muted={true} />
-          </div>
-
-          {/* Seek Scrubber & Live Audio Meter */}
-          <div className="space-y-1.5 pt-0.5">
+          {/* Seek Scrubber & Live Output Meter */}
+          <div className="space-y-1.5">
             <div className="flex items-center gap-3">
               <span className="font-mono-tabular text-xs text-slate-300 w-12">
                 {formatDuration(currentTime)}
@@ -453,9 +471,8 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               </span>
             </div>
 
-            {/* Live RMS Output Meter */}
             <div className="flex items-center gap-2.5">
-              <span className="text-[11px] text-slate-400 w-12">Output</span>
+              <span className="text-[11px] text-slate-400 w-12">Audio</span>
               <div className="flex-1 h-1.5 rounded-full bg-[#0A0D14] overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-[#5E6AD2] via-[#3B82F6] to-[#38BDF8] transition-[width] duration-75"
@@ -467,12 +484,9 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               </span>
             </div>
           </div>
-        </section>
 
-        {/* Operator Tactile Stage Controls */}
-        <section className="bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 space-y-3 shrink-0">
-          {/* Primary Transport + Volume */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Transport Row: Play, Pause, Stop, Next, Previous + Volume */}
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -513,7 +527,6 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               </button>
             </div>
 
-            {/* Master Volume & Mute */}
             <div className="flex items-center gap-2.5 min-w-[200px]">
               <button
                 type="button"
@@ -543,113 +556,126 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
 
           <div className="h-px bg-white/[0.07]" />
 
-          {/* Smart Fade Out / Fade In Hero Deck */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-stretch">
-            <button
-              type="button"
-              onClick={onSmartFadeOut}
-              disabled={!currentMedia}
-              title={`Smart Fade Out (${settings.shortcuts.fadeOut})`}
-              className="md:col-span-5 relative overflow-hidden min-h-[54px] px-4 py-2.5 rounded-lg bg-gradient-to-r from-[#5E6AD2] to-[#7C5CFC] hover:brightness-110 disabled:opacity-45 text-white font-display font-bold text-sm flex items-center justify-between gap-2 cursor-pointer transition-all"
-            >
-              {fadeProgress.active && fadeProgress.direction === 'out' && (
-                <div
-                  className="absolute inset-y-0 left-0 bg-black/35 pointer-events-none"
-                  style={{ width: `${Math.round(fadeProgress.progress * 100)}%` }}
-                />
-              )}
-              <span className="relative flex items-center gap-2">
-                <Sunset className="w-5 h-5" />
-                <span>FADE OUT</span>
+          {/* SMART FADE OUT / FADE IN MANUAL CONTROLS */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-display font-semibold uppercase tracking-wider text-indigo-300">
+                Smart Fade Out / Fade In
               </span>
-              <span className="relative font-mono-tabular text-xs bg-black/25 px-2 py-0.5 rounded">
-                {fadeProgress.active && fadeProgress.direction === 'out'
-                  ? `${Math.round(fadeProgress.currentVolPct)}%`
-                  : `${settings.fade.fadeOutDurationSec}s -> ${settings.fade.postFadeAction.toUpperCase()}`}
+              <span className="text-slate-400">
+                {fadeProgress.active
+                  ? `${fadeProgress.direction === 'out' ? 'Fading Out' : 'Fading In'}: ${Math.round(fadeProgress.currentVolPct)}%`
+                  : 'Manual stage volume transition'}
               </span>
-            </button>
+            </div>
 
-            <button
-              type="button"
-              onClick={onSmartFadeIn}
-              disabled={!currentMedia}
-              title={`Smart Fade In (${settings.shortcuts.fadeIn})`}
-              className="md:col-span-3 relative overflow-hidden min-h-[54px] px-3.5 py-2.5 rounded-lg bg-[#1A2236] hover:bg-[#232D47] border border-indigo-400/30 disabled:opacity-45 text-indigo-100 font-display font-semibold text-xs flex items-center justify-between gap-2 cursor-pointer"
-            >
-              {fadeProgress.active && fadeProgress.direction === 'in' && (
-                <div
-                  className="absolute inset-y-0 left-0 bg-indigo-500/30 pointer-events-none"
-                  style={{ width: `${Math.round(fadeProgress.progress * 100)}%` }}
-                />
-              )}
-              <span className="relative flex items-center gap-1.5">
-                <Sunrise className="w-4 h-4 text-indigo-300" />
-                <span>FADE IN</span>
-              </span>
-              <span className="relative font-mono-tabular text-[11px] text-indigo-300">
-                {settings.fade.fadeInDurationSec}s
-              </span>
-            </button>
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-stretch">
+              <button
+                type="button"
+                onClick={onSmartFadeOut}
+                disabled={!currentMedia}
+                title={`Smart Fade Out (${settings.shortcuts.fadeOut})`}
+                className="md:col-span-5 relative overflow-hidden min-h-[60px] px-4 py-3 rounded-lg bg-gradient-to-r from-[#5E6AD2] to-[#7C5CFC] hover:brightness-110 disabled:opacity-45 text-white font-display font-bold text-base flex items-center justify-between gap-2 cursor-pointer transition-all"
+              >
+                {fadeProgress.active && fadeProgress.direction === 'out' && (
+                  <div
+                    className="absolute inset-y-0 left-0 bg-black/35 pointer-events-none"
+                    style={{ width: `${Math.round(fadeProgress.progress * 100)}%` }}
+                  />
+                )}
+                <span className="relative flex items-center gap-2.5">
+                  <Sunset className="w-5 h-5" />
+                  <span>FADE OUT</span>
+                </span>
+                <span className="relative font-mono-tabular text-xs bg-black/25 px-2 py-0.5 rounded">
+                  {fadeProgress.active && fadeProgress.direction === 'out'
+                    ? `${Math.round(fadeProgress.currentVolPct)}%`
+                    : `${settings.fade.fadeOutDurationSec}s -> ${settings.fade.postFadeAction.toUpperCase()}`}
+                </span>
+              </button>
 
-            <div className="md:col-span-4 grid grid-cols-2 gap-2">
-              <div className="px-2.5 py-1.5 rounded-lg bg-[#0A0D14] border border-white/[0.07] flex flex-col justify-center">
-                <span className="text-[10px] text-slate-400">Fade Duration</span>
-                <select
-                  value={settings.fade.fadeOutDurationSec}
-                  onChange={(e) =>
-                    onUpdateSettings((p) => ({
-                      ...p,
-                      fade: {
-                        ...p.fade,
-                        fadeOutDurationSec: Number(e.target.value) as 1 | 2 | 3 | 5 | 10 | 15,
-                      },
-                    }))
-                  }
-                  className="bg-transparent text-xs font-mono-tabular text-white focus:outline-none cursor-pointer"
-                >
-                  {[1, 2, 3, 5, 10, 15].map((s) => (
-                    <option key={s} value={s} className="bg-[#111622]">
-                      {s} seconds
+              <button
+                type="button"
+                onClick={onSmartFadeIn}
+                disabled={!currentMedia}
+                title={`Smart Fade In (${settings.shortcuts.fadeIn})`}
+                className="md:col-span-3 relative overflow-hidden min-h-[60px] px-3.5 py-2.5 rounded-lg bg-[#1A2236] hover:bg-[#232D47] border border-indigo-400/35 disabled:opacity-45 text-indigo-100 font-display font-semibold text-sm flex items-center justify-between gap-2 cursor-pointer"
+              >
+                {fadeProgress.active && fadeProgress.direction === 'in' && (
+                  <div
+                    className="absolute inset-y-0 left-0 bg-indigo-500/30 pointer-events-none"
+                    style={{ width: `${Math.round(fadeProgress.progress * 100)}%` }}
+                  />
+                )}
+                <span className="relative flex items-center gap-1.5">
+                  <Sunrise className="w-4 h-4 text-indigo-300" />
+                  <span>FADE IN</span>
+                </span>
+                <span className="relative font-mono-tabular text-xs text-indigo-300">
+                  {settings.fade.fadeInDurationSec}s
+                </span>
+              </button>
+
+              <div className="md:col-span-4 grid grid-cols-2 gap-2">
+                <div className="px-2.5 py-1.5 rounded-lg bg-[#0A0D14] border border-white/[0.07] flex flex-col justify-center">
+                  <span className="text-[10px] text-slate-400">Fade Out Time</span>
+                  <select
+                    value={settings.fade.fadeOutDurationSec}
+                    onChange={(e) =>
+                      onUpdateSettings((p) => ({
+                        ...p,
+                        fade: {
+                          ...p.fade,
+                          fadeOutDurationSec: Number(e.target.value) as 1 | 2 | 3 | 5 | 10 | 15,
+                        },
+                      }))
+                    }
+                    className="bg-transparent text-xs font-mono-tabular text-white focus:outline-none cursor-pointer"
+                  >
+                    {[1, 2, 3, 5, 10, 15].map((s) => (
+                      <option key={s} value={s} className="bg-[#111622]">
+                        {s} seconds
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="px-2.5 py-1.5 rounded-lg bg-[#0A0D14] border border-white/[0.07] flex flex-col justify-center">
+                  <span className="text-[10px] text-slate-400">Auto-Fade End</span>
+                  <select
+                    value={settings.fade.autoFadeAtEndEnabled ? settings.fade.autoFadeAtEndSec : 0}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      onUpdateSettings((p) => ({
+                        ...p,
+                        fade: {
+                          ...p.fade,
+                          autoFadeAtEndEnabled: val > 0,
+                          autoFadeAtEndSec: (val > 0 ? val : p.fade.autoFadeAtEndSec) as
+                            | 3
+                            | 5
+                            | 10
+                            | 15,
+                        },
+                      }));
+                    }}
+                    className="bg-transparent text-xs font-mono-tabular text-white focus:outline-none cursor-pointer"
+                  >
+                    <option value={0} className="bg-[#111622]">
+                      Off
                     </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="px-2.5 py-1.5 rounded-lg bg-[#0A0D14] border border-white/[0.07] flex flex-col justify-center">
-                <span className="text-[10px] text-slate-400">Auto-Fade End</span>
-                <select
-                  value={settings.fade.autoFadeAtEndEnabled ? settings.fade.autoFadeAtEndSec : 0}
-                  onChange={(e) => {
-                    const val = Number(e.target.value);
-                    onUpdateSettings((p) => ({
-                      ...p,
-                      fade: {
-                        ...p.fade,
-                        autoFadeAtEndEnabled: val > 0,
-                        autoFadeAtEndSec: (val > 0 ? val : p.fade.autoFadeAtEndSec) as
-                          | 3
-                          | 5
-                          | 10
-                          | 15,
-                      },
-                    }));
-                  }}
-                  className="bg-transparent text-xs font-mono-tabular text-white focus:outline-none cursor-pointer"
-                >
-                  <option value={0} className="bg-[#111622]">
-                    Off
-                  </option>
-                  {[3, 5, 10, 15].map((s) => (
-                    <option key={s} value={s} className="bg-[#111622]">
-                      Last {s}s
-                    </option>
-                  ))}
-                </select>
+                    {[3, 5, 10, 15].map((s) => (
+                      <option key={s} value={s} className="bg-[#111622]">
+                        Last {s}s
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Projector Output, Black Screen, Freeze Frame */}
+          {/* Dual Display Projector, Black Screen, Freeze Frame */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <button
               type="button"
@@ -757,8 +783,8 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         </section>
       </main>
 
-      {/* COLUMN 3: Digital Clock, Countdown & Service Playlist */}
-      <aside className="w-full xl:w-[320px] shrink-0 flex flex-col gap-3 min-h-[320px] xl:min-h-0 overflow-hidden">
+      {/* COLUMN 3: Digital Clock, Countdown & Drag-and-Drop Service Playlist Schedule */}
+      <aside className="w-full xl:w-[335px] shrink-0 flex flex-col gap-3 min-h-[340px] xl:min-h-0 overflow-hidden">
         {/* Digital Clock & Countdown Card */}
         <section className="bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 space-y-2.5 shrink-0">
           <div className="flex items-center justify-between">
@@ -829,7 +855,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
           </div>
         </section>
 
-        {/* Active Service Playlist */}
+        {/* Active Service Playlist Schedule (with direct Drag-and-Drop ordering!) */}
         <section className="flex-1 min-h-0 bg-[#111622] border border-white/[0.08] rounded-xl p-3.5 flex flex-col gap-2.5 overflow-hidden">
           <div className="flex items-center justify-between gap-2">
             <select
@@ -875,7 +901,13 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
             </button>
           </div>
 
-          {/* Next Up Indicator */}
+          <div className="flex items-center justify-between text-[11px] text-slate-400 px-0.5">
+            <span>Drag items to set start-to-end schedule</span>
+            <span className="font-mono-tabular">
+              {playlistEntries.length} {playlistEntries.length === 1 ? 'item' : 'items'}
+            </span>
+          </div>
+
           <div className="px-2.5 py-2 rounded-lg bg-[#0A0D14] border border-white/[0.07] text-xs">
             <span className="text-slate-400">Next Up: </span>
             <span className="text-slate-100 font-medium">
@@ -891,20 +923,57 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
             ) : (
               playlistEntries.map(({ index, id, item }) => {
                 const isCurrent = index === activeIndex && currentMedia?.id === id;
+                const isDropTarget = dragOverIndex === index && dragPlaylistIndex !== index;
                 return (
                   <div
                     key={`${id}-${index}`}
-                    className={`flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border transition-colors ${
-                      isCurrent
-                        ? 'bg-[#5E6AD2]/20 border-[#5E6AD2]/50'
-                        : 'bg-white/[0.02] border-transparent hover:bg-white/[0.05]'
-                    }`}
+                    draggable
+                    onDragStart={(e) => {
+                      setDragPlaylistIndex(index);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', String(index));
+                    }}
+                    onDragOver={(e) => {
+                      if (dragPlaylistIndex !== null) {
+                        e.preventDefault();
+                        setDragOverIndex(index);
+                      }
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverIndex === index) setDragOverIndex(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (dragPlaylistIndex !== null && dragPlaylistIndex !== index) {
+                        onReorderActivePlaylist(dragPlaylistIndex, index);
+                      }
+                      setDragPlaylistIndex(null);
+                      setDragOverIndex(null);
+                    }}
+                    onDragEnd={() => {
+                      setDragPlaylistIndex(null);
+                      setDragOverIndex(null);
+                    }}
+                    className={`flex items-center justify-between gap-1.5 px-2 py-2 rounded-lg border transition-colors ${
+                      isDropTarget
+                        ? 'border-indigo-400 bg-indigo-500/15'
+                        : isCurrent
+                          ? 'bg-[#5E6AD2]/20 border-[#5E6AD2]/50'
+                          : 'bg-white/[0.02] border-transparent hover:bg-white/[0.05]'
+                    } ${dragPlaylistIndex === index ? 'opacity-50' : ''}`}
                   >
+                    <span
+                      className="text-slate-500 hover:text-slate-300 cursor-grab active:cursor-grabbing shrink-0"
+                      title="Drag to reorder playlist position"
+                    >
+                      <GripVertical className="w-3.5 h-3.5" />
+                    </span>
+
                     <button
                       type="button"
                       disabled={!item || item.missing}
                       onClick={() => item && onPlayMedia(item, index)}
-                      className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer disabled:opacity-45"
+                      className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer disabled:opacity-45"
                     >
                       <span className="font-mono-tabular text-[11px] text-slate-400 w-5 shrink-0">
                         {String(index + 1).padStart(2, '0')}
@@ -924,20 +993,52 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                           <span className="font-mono-tabular">
                             {item ? formatDuration(item.durationSec) : '--:--'}
                           </span>
+                          {index === 0 && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="text-indigo-300">Start</span>
+                            </>
+                          )}
+                          {index === playlistEntries.length - 1 && playlistEntries.length > 1 && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="text-slate-300">End</span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </button>
 
-                    {item && !isCurrent && !item.missing && (
+                    <div className="flex items-center gap-0.5 shrink-0">
                       <button
                         type="button"
-                        onClick={() => onQueueNext(item.id)}
-                        title="Queue Next"
-                        className="px-1.5 py-1 rounded text-[10px] bg-white/[0.04] hover:bg-white/[0.12] text-slate-300 shrink-0 cursor-pointer"
+                        disabled={index === 0}
+                        onClick={() => onReorderActivePlaylist(index, index - 1)}
+                        title="Move up"
+                        className="p-1 rounded hover:bg-white/[0.1] text-slate-400 hover:text-white disabled:opacity-25 cursor-pointer"
                       >
-                        Next
+                        <ArrowUp className="w-3 h-3" />
                       </button>
-                    )}
+                      <button
+                        type="button"
+                        disabled={index === playlistEntries.length - 1}
+                        onClick={() => onReorderActivePlaylist(index, index + 1)}
+                        title="Move down"
+                        className="p-1 rounded hover:bg-white/[0.1] text-slate-400 hover:text-white disabled:opacity-25 cursor-pointer"
+                      >
+                        <ArrowDown className="w-3 h-3" />
+                      </button>
+                      {item && !isCurrent && !item.missing && (
+                        <button
+                          type="button"
+                          onClick={() => onQueueNext(item.id)}
+                          title="Queue Next"
+                          className="px-1.5 py-0.5 rounded text-[10px] bg-white/[0.04] hover:bg-white/[0.12] text-slate-300 cursor-pointer"
+                        >
+                          Next
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })
